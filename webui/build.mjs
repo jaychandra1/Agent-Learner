@@ -10,10 +10,15 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const dist = join(here, "dist");
-const backend = (process.env.BACKEND_URL || "").trim().replace(/\/+$/, "");
+let backend = (process.env.BACKEND_URL || "").trim().replace(/\/+$/, "");
 
-if (backend && !/^https?:\/\/[^\s/]+/i.test(backend)) {
-  console.error(`BACKEND_URL must be a full address such as https://your-pq.onrender.com, not "${backend}"`);
+// "my-pq.onrender.com" is taken as "https://my-pq.onrender.com"
+if (backend && !/^https?:\/\//i.test(backend)) {
+  backend = "https://" + backend;
+  console.warn(`BACKEND_URL has no "https://" in front: using ${backend}`);
+}
+if (backend && !/^https?:\/\/[^\s/.]+(\.[^\s/.]+)+(:\d+)?(\/\S*)?$|^https?:\/\/localhost(:\d+)?$/i.test(backend)) {
+  console.error(`BACKEND_URL must be an address such as https://your-pq.onrender.com, not "${process.env.BACKEND_URL}"`);
   process.exit(1);
 }
 
