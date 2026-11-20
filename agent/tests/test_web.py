@@ -114,6 +114,14 @@ def test_cors_allows_the_ui_and_nobody_else(client):
     assert "access-control-allow-origin" not in other.headers
 
 
+def test_web_ui_setting_is_read_forgivingly():
+    """People paste the address in many forms; a browser always sends scheme and host only."""
+    assert web.origins("pq-ui.vercel.app") == ["https://pq-ui.vercel.app"]
+    assert web.origins(" https://PQ-ui.vercel.app/ , https://pq-ui.vercel.app/chat?x=1") == ["https://pq-ui.vercel.app"]
+    assert web.origins('"https://a.example", localhost:5173') == ["https://a.example", "http://localhost:5173"]
+    assert web.origins("*") == ["*"] and web.origins("") == []
+
+
 def test_api_is_off_without_web_ui(client, model, monkeypatch):
     monkeypatch.setattr(web, "ENABLED", False)
     assert ask(client, [user("q")]).status_code == 404 and model == []

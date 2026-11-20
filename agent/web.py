@@ -37,7 +37,27 @@ import teams
 
 logger = logging.getLogger("pq.web")
 
-ORIGINS = [o.rstrip("/") for o in re.split(r"[,\s]+", os.getenv("WEB_UI", "").strip()) if o]
+
+
+def origins(value: str) -> list[str]:
+    """WEB_UI -> the origins a browser sends: scheme and host, nothing else.
+    'pq-ui.vercel.app/', 'https://pq-ui.vercel.app/chat' -> 'https://pq-ui.vercel.app'."""
+    out = []
+    for entry in re.split(r"[,\s]+", (value or "").strip()):
+        entry = entry.strip("\"'")
+        if not entry:
+            continue
+        if entry != "*":
+            if not re.match(r"^https?://", entry, re.I):
+                entry = ("http://" if entry.startswith(("localhost", "127.0.0.1")) else "https://") + entry
+            scheme, rest = entry.split("://", 1)
+            entry = f"{scheme.lower()}://{rest.split('/', 1)[0].lower()}"
+        if entry not in out:
+            out.append(entry)
+    return out
+
+
+ORIGINS = origins(os.getenv("WEB_UI", ""))
 ENABLED = bool(ORIGINS)
 ACCESS_CODE = os.getenv("WEB_ACCESS_CODE", "").strip()
 try:
