@@ -85,7 +85,7 @@ spec:
         - name: agent
           # EDIT: your Docker Hub user/org. In production pin a tag CI pushed (sha-xxxxxxx) so a restart
           # never picks up an untested image; ":latest" + Always is convenient for testing only.
-          image: docker.io/jayachandra261020/pq:latest
+          image: docker.io/jayachandra261020/learner:latest
           imagePullPolicy: Always
           ports:
             - name: http             # internal API and health checks (never exposed)

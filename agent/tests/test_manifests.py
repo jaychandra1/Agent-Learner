@@ -88,7 +88,7 @@ def test_deployment():
     assert pod["securityContext"]["runAsNonRoot"] is True
     assert spec["selector"]["matchLabels"].items() <= spec["template"]["metadata"]["labels"].items()
     (c,) = pod["containers"]
-    assert c["image"].startswith("docker.io/") and c["image"].endswith("/pq:latest")
+    assert c["image"].startswith("docker.io/") and c["image"].endswith("/learner:latest")
     assert {p["name"]: p["containerPort"] for p in c["ports"]} == {"http": 8000, "teams": 8080}
     env_from = {next(iter(k for k in e if k.endswith("Ref"))): e for e in c["envFrom"]}
     assert env_from["configMapRef"]["configMapRef"]["name"] == "pq-config"

@@ -2,7 +2,7 @@ name: CI
 
 # Lint + tests (including checks of deploy/*.yaml) on every PR and push.
 # On push to main: build the agent image for amd64 + arm64 and push it to Docker Hub as
-#   docker.io/<DOCKERHUB_USERNAME>/pq:sha-<7 chars>  and  :latest
+#   docker.io/<DOCKERHUB_USERNAME>/learner:latest
 # "Run workflow" on main (Actions tab) rebuilds and pushes the image without a code change:
 # use it to pick up operating-system security updates.
 # Needs (GitHub > Settings > Secrets and variables > Actions):
@@ -22,7 +22,7 @@ permissions:
   contents: read
 
 env:
-  IMAGE_NAME: learner:latest
+  IMAGE_NAME: learner   # the repository name only; the tag is added below and is always "latest"
 
 jobs:
   test:
@@ -57,33 +57,26 @@ jobs:
         with:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Image name and tag
+      - name: Image name
         id: meta
-        run: |
-          echo "image=docker.io/${{ vars.DOCKERHUB_USERNAME }}/${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
-          echo "tag=sha-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+        run: echo "image=docker.io/${{ vars.DOCKERHUB_USERNAME }}/${IMAGE_NAME%%:*}" >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
         with:
           context: agent
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.tag }}
-            ${{ steps.meta.outputs.image }}:latest
+          tags: ${{ steps.meta.outputs.image }}:latest
           labels: |
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
             org.opencontainers.image.revision=${{ github.sha }}
       - name: Summary
         run: |
-          IMAGE="${{ steps.meta.outputs.image }}"; TAG="${{ steps.meta.outputs.tag }}"
+          IMAGE="${{ steps.meta.outputs.image }}"
           {
             echo "### Image pushed"
             echo ""
-            echo "\`${IMAGE}:${TAG}\` (also \`${IMAGE}:latest\`), for linux/amd64 and linux/arm64"
+            echo "\`${IMAGE}:latest\` (commit ${GITHUB_SHA::7}), for linux/amd64 and linux/arm64"
             echo ""
-            echo "Roll it out to a cluster where deploy/deployment.yaml is applied:"
-            echo '```bash'
-            echo "kubectl -n pq set image deployment/pq agent=${IMAGE}:${TAG}"
-            echo '```'
-            echo "or, if deployment.yaml uses \`:latest\`: \`kubectl -n pq rollout restart deploy/pq\`"
+            echo "Pick it up: redeploy the service on Render, or in a cluster"
+            echo "\`kubectl -n pq rollout restart deploy/pq\`"
           } >> "$GITHUB_STEP_SUMMARY"
