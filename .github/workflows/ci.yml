@@ -22,7 +22,7 @@ permissions:
   contents: read
 
 env:
-  IMAGE_NAME: pq
+  IMAGE_NAME: learner:latest
 
 jobs:
   test:
