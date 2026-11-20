@@ -1,0 +1,14 @@
+{
+  "name": "pq-webui",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Web UI for PQ. A static site: chats are stored in the browser only.",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "start": "node build.mjs && npx --yes serve@14 dist -l 5173"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

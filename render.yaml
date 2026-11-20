@@ -1,0 +1,43 @@
+# Render blueprint: the PQ backend (Docker) and the web UI (static site).
+# In Render: New > Blueprint, pick this repository. Render then asks for the values marked
+# "sync: false". Full walk-through: docs/WEB_UI.md.
+#
+# The two services need each other's address:
+#   pq (backend)     WEB_UI       = the UI's address, e.g. https://pq-ui.onrender.com
+#   pq-ui (the UI)   BACKEND_URL  = the backend's address, e.g. https://pq.onrender.com
+# Render only knows them after the first deploy: fill them in then and redeploy both.
+services:
+  - type: web
+    name: pq
+    runtime: docker
+    rootDir: agent
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: LLM_PROVIDER          # groq | anthropic | cursor | gemini | openai | ... (docs/AI_PROVIDERS.md)
+        sync: false
+      - key: LLM_API_KEY
+        sync: false
+      - key: WEB_UI                # the UI's address; the API under /api is off until this is set
+        sync: false
+      - key: WEB_ACCESS_CODE       # recommended: a code people must enter once in the UI
+        sync: false
+      - key: PROTECTED_NAMESPACES  # no Kubernetes namespace here
+        value: none
+
+  - type: web
+    name: pq-ui
+    runtime: static
+    rootDir: webui
+    buildCommand: npm run build
+    staticPublishPath: dist
+    envVars:
+      - key: BACKEND_URL           # the backend's address, read at build time
+        sync: false
+    headers:
+      - path: /*
+        name: X-Frame-Options
+        value: DENY
+      - path: /*
+        name: Referrer-Policy
+        value: no-referrer

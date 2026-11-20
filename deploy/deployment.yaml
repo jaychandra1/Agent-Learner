@@ -1,0 +1,191 @@
+# ----------------------------------------------------------------------
+# PQ: everything it needs, in one file.
+#
+# Before applying, edit two things (search for "EDIT"):
+#   1. The image: your Docker Hub user/org.
+#   2. The ConfigMap: LLM_PROVIDER and the Teams tenant / allowed users.
+# Create the Secret "pq-secrets" first (docs/INSTALLATION.md, step 3), then:
+#   kubectl apply -f deploy/deployment.yaml
+#
+# Permissions: none. PQ never talks to the Kubernetes API; its pod has no service account
+# token. It only calls the AI provider and the Teams webhooks.
+# ----------------------------------------------------------------------
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: pq
+  labels:
+    app.kubernetes.io/name: pq
+    pod-security.kubernetes.io/enforce: restricted
+---
+# --- SETTINGS ---
+# After changing these: kubectl apply -f deploy/deployment.yaml && kubectl -n pq rollout restart deploy/pq
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pq-config
+  namespace: pq
+  labels:
+    app.kubernetes.io/name: pq
+data:
+  TIMEZONE: "Asia/Kolkata"         # EDIT: time zone for times on the administrators' cards (IANA name, e.g. "Europe/London"; default UTC)
+  LOG_LEVEL: "INFO"                # DEBUG | INFO | WARNING | ERROR
+  # --- AI model (docs/AI_PROVIDERS.md). The key goes in the Secret as LLM_API_KEY. ---
+  LLM_PROVIDER: "cursor"             # EDIT: groq | anthropic | cursor | gemini | openai | azure-openai | openrouter | mistral | ollama | custom | none
+  LLM_MODEL: ""                    # "" = the provider's default model (required for openai, azure-openai, ollama, custom)
+  LLM_BASE_URL: ""                 # "" = the provider's default endpoint (required for azure-openai, ollama, custom)
+  LLM_EFFORT: ""                   # "" = provider default; low | medium | high ("none" = don't send)
+  LLM_MAX_REQUEST_CHARS: ""        # "" = provider default: size of one request; older turns of a conversation are dropped to fit (raise on a paid Groq plan)
+  LLM_MAX_OUTPUT_TOKENS: ""        # "" = provider default: longest reply; raise it if explanations get cut off
+  LLM_TIMEOUT_SECONDS: ""          # "" = provider default: one model call (Cursor: one whole run)
+  LLM_FALLBACKS: "default"         # Claude only: server-side refusal fallback; "off" to disable
+  ANSWER_MAX_WORDS: "1200"         # words a full explanation should stay under, code not counted ("0" = no limit)
+  WEB_UI: ""                       # origin of the web UI (webui/), e.g. "https://pq-ui.example.com"; "" = its API (/api/chat) is off (docs/WEB_UI.md)
+  TEAMS_TENANT_ID: "5a1f4efd-5119-4558-8d3a-fea50f623c20"              # recommended: only answer Teams messages from your Microsoft 365 tenant
+  TEAMS_ALLOWED_USER_IDS: "38a349d8-18b4-430c-9a4f-f358a5307c5d"       # optional: comma-separated Entra object IDs of the people allowed to ask ("" = everyone in the tenant)
+  BOUNDARIES_ENABLED: "true"       # questions about PQ itself (setup, AI model, rules, its namespace) are refused and reported to the administrators (docs/RULES.md, section 3)
+  PROTECTED_NAMESPACES: "pq" # namespaces nobody in Teams may ask about; change it if PQ runs in another namespace ("none" = protect no namespace)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pq
+  namespace: pq
+  labels:
+    app.kubernetes.io/name: pq
+spec:
+  replicas: 1                      # always 1: conversations are kept in the pod's memory
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pq
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pq
+      annotations:
+        instrumentation.opentelemetry.io/inject-java: "false"
+        instrumentation.opentelemetry.io/inject-python: "false"
+        instrumentation.opentelemetry.io/inject-nodejs: "false"
+        instrumentation.opentelemetry.io/inject-dotnet: "false"
+    spec:
+      automountServiceAccountToken: false   # PQ never talks to the Kubernetes API
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: agent
+          # EDIT: your Docker Hub user/org. In production pin a tag CI pushed (sha-xxxxxxx) so a restart
+          # never picks up an untested image; ":latest" + Always is convenient for testing only.
+          image: docker.io/jayachandra261020/pq:latest
+          imagePullPolicy: Always
+          ports:
+            - name: http             # internal API and health checks (never exposed)
+              containerPort: 8000
+            - name: teams            # POST /teams/webhook only; reached only through the Cloudflare Tunnel
+              containerPort: 8080
+          envFrom:
+            - configMapRef:
+                name: pq-config
+            - secretRef:
+                name: pq-secrets   # LLM_API_KEY, AGENT_API_KEY, TEAMS_* (docs/INSTALLATION.md, Step 3)
+                optional: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:              # the API is up
+            httpGet:
+              path: /ready
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:               # fails when the Teams server dies: restart
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 1Gi              # headroom for the Cursor provider's helper process
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp                  # the only writable place: the Cursor SDK's state (HOME=/tmp)
+          emptyDir:
+            sizeLimit: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pq
+  namespace: pq
+  labels:
+    app.kubernetes.io/name: pq
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: pq
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+# Target of the Cloudflare Tunnel route (deploy/cloudflare-tunnel.yaml): POST /teams/webhook only.
+apiVersion: v1
+kind: Service
+metadata:
+  name: pq-teams
+  namespace: pq
+  labels:
+    app.kubernetes.io/name: pq
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: pq
+  ports:
+    - name: teams
+      port: 80
+      targetPort: teams
+---
+# --- NETWORK POLICY: who may connect to the PQ pod ---
+# Enforced when the cluster runs a network-policy engine (on EKS: the VPC CNI with network
+# policy turned on). Without one it is simply ignored.
+#   8080 (Teams webhook)      only from the Cloudflare Tunnel pods
+#   8000 (internal API)       from no pod at all; kubectl port-forward and health checks still work
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pq
+  namespace: pq
+  labels:
+    app.kubernetes.io/name: pq
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: pq
+  policyTypes: ["Ingress"]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: pq-tunnel
+      ports:
+        - protocol: TCP
+          port: 8080

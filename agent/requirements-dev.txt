@@ -1,0 +1,4 @@
+-r requirements.txt
+pytest>=8.0,<10
+flake8>=7.0,<8
+pyyaml>=6.0,<7  # tests/test_manifests.py reads deploy/*.yaml

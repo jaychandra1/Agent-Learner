@@ -1,0 +1,8 @@
+# Runtime dependencies. Upper bounds stop a new major version from changing behaviour
+# on an image rebuild; raise them deliberately after running the tests.
+anthropic>=2.0.0,<3
+fastapi>=0.110.0,<1
+uvicorn[standard]>=0.29.0,<1
+pydantic>=2.6.0,<3
+requests>=2.31.0,<3
+tzdata>=2024.1  # time zone data for TIMEZONE (the slim base image has none for Python's zoneinfo)

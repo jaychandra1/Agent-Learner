@@ -1,0 +1,124 @@
+# ----------------------------------------------------------------------
+# OPTIONAL: only needed to ask PQ questions from a Teams channel.
+# The internal API (POST /chat) and the CLI work without it.
+#
+# Cloudflare Tunnel. Two cloudflared pods open connections OUT to Cloudflare. Cloudflare
+# sends https://<your hostname>/teams/webhook down those connections to the
+# pq-teams Service (port 8080 of the PQ pod, which serves
+# POST /teams/webhook and nothing else). Nothing in AWS accepts connections from the
+# internet: no load balancer, no public IP, no open port.
+#
+# Before applying (docs/INSTALLATION.md, Step 5):
+#   1. create the tunnel and its route in the Cloudflare dashboard,
+#   2. store the tunnel token in the cluster:
+#      kubectl -n pq create secret generic pq-tunnel --from-literal=TUNNEL_TOKEN='<token>'
+# Then: kubectl apply -f deploy/cloudflare-tunnel.yaml
+# ----------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pq-tunnel
+  namespace: pq
+  labels:
+    app.kubernetes.io/name: pq-tunnel
+spec:
+  replicas: 2                      # two connectors: no gap during restarts, node drains or token rotation
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pq-tunnel
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: pq-tunnel
+      annotations:
+        # Opt out of automatic OpenTelemetry injection (see deploy/deployment.yaml)
+        instrumentation.opentelemetry.io/inject-java: "false"
+        instrumentation.opentelemetry.io/inject-python: "false"
+        instrumentation.opentelemetry.io/inject-nodejs: "false"
+        instrumentation.opentelemetry.io/inject-dotnet: "false"
+    spec:
+      automountServiceAccountToken: false   # cloudflared never talks to the Kubernetes API
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:       # prefer the two pods on different nodes
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: pq-tunnel
+      containers:
+        - name: cloudflared
+          image: docker.io/cloudflare/cloudflared:2026.10.7   # pinned; update on purpose (docs/INSTALLATION.md, Step 7)
+          args:                        # order matters: "run" comes last
+            - tunnel
+            - --no-autoupdate
+            - --loglevel
+            - info
+            - --metrics
+            - 0.0.0.0:2000
+            - run
+          env:
+            - name: TUNNEL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: pq-tunnel
+                  key: TUNNEL_TOKEN
+          ports:
+            - name: metrics
+              containerPort: 2000
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          readinessProbe:              # /ready is 200 only while connected to Cloudflare
+            httpGet:
+              path: /ready
+              port: metrics
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+---
+# Keep at least one connector running during node drains and cluster upgrades.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: pq-tunnel
+  namespace: pq
+  labels:
+    app.kubernetes.io/name: pq-tunnel
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: pq-tunnel
+---
+# Nothing may connect to the tunnel pods; they only connect out (health checks still work).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pq-tunnel
+  namespace: pq
+  labels:
+    app.kubernetes.io/name: pq-tunnel
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: pq-tunnel
+  policyTypes: ["Ingress"]
