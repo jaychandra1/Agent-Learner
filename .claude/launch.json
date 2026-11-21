@@ -4,7 +4,13 @@
     {
       "name": "pq-webui",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "http.server", "5173", "--directory", "webui"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "5173",
+        "--directory",
+        "webui"
+      ],
       "port": 5173
     }
   ]

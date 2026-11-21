@@ -4,6 +4,7 @@ A chat page in the style of ChatGPT or Copilot, in [`webui/`](../webui). It is a
 
 - **Chats are stored on the person's device only**, in the browser's `localStorage`. The backend keeps nothing.
 - **The chat's memory is the device's memory.** With every question the page sends the earlier messages of that chat, read from the device. That is how "go deeper" or "continue" works. A chat that is deleted on the device is gone everywhere.
+- **Answers appear while PQ writes them**, word by word, like in ChatGPT. **Stop** keeps what has arrived so far.
 - The same rules apply as in Teams: the teaching rules ([RULES.md](RULES.md), section 1) and the boundaries (section 3).
 
 ```mermaid
@@ -94,7 +95,26 @@ curl -s https://<backend>/api/health
 
 ---
 
-## 3. Other hosts for the UI
+## 3. Deploy the UI on Vercel (the backend's address stays hidden)
+
+On Vercel the page never learns where the backend is. It sends questions to its own address (`/api/chat`), and a small server-side function, [`webui/api/chat.js`](../webui/api/chat.js), passes them on to the backend. `BACKEND_URL` is read by that function on Vercel's servers. It is not in the page, not in its scripts, and not in the browser's network tab. [`webui/api/stream.js`](../webui/api/stream.js) does the same for the streamed answer and passes each piece on as it arrives.
+
+| Vercel setting | Value |
+|---|---|
+| Root Directory | `webui` |
+| Environment variable | `BACKEND_URL` = the backend's address |
+
+Build command and output directory come from [`webui/vercel.json`](../webui/vercel.json). After changing `BACKEND_URL`, redeploy.
+
+- The function may run up to 300 seconds (`maxDuration` in `vercel.json`), because a full explanation can take a while. If your Vercel plan allows less, lower that number.
+- `WEB_UI` on the backend must still be set (to the Vercel address) to switch the chat API on.
+- The backend itself is still on the public internet. Hiding its address is not protection by itself: keep `WEB_ACCESS_CODE` set.
+
+**On a plain static host** (Render Static Site, GitHub Pages, S3) there is no server-side function, so the page calls the backend directly and its address is in `config.js` and visible in the browser's developer tools. It is still never displayed in the page. Use Vercel, or a host that can forward `/api/chat` to the backend (then build with `PQ_PROXY=1`), if the address must stay hidden.
+
+---
+
+## 4. Other hosts for the UI
 
 Any static host works (Netlify, Vercel, Cloudflare Pages, GitHub Pages, an S3 bucket, nginx). Build with `BACKEND_URL` set and publish `webui/dist`:
 
@@ -103,13 +123,13 @@ cd webui
 BACKEND_URL=https://your-backend.example.com npm run build
 ```
 
-The build needs Node.js 18 or newer and no packages. It copies the files to `dist/` and writes `dist/config.js` with the backend's address.
+The build needs Node.js 18 or newer and no packages. It copies the files to `dist/` and writes `dist/config.js`.
 
-A host without a build step can serve the `webui/` folder as it is: edit `BACKEND_URL` in [`webui/config.js`](../webui/config.js), or leave it empty and let each person enter the address under Settings, **Backend URL**.
+A host without a build step can serve the `webui/` folder as it is: edit `BACKEND_URL` in [`webui/config.js`](../webui/config.js).
 
 ---
 
-## 4. Using it
+## 5. Using it
 
 | | |
 |---|---|
@@ -117,14 +137,14 @@ A host without a build step can serve the `webui/` folder as it is: edit `BACKEN
 | **Follow up** | Ask in the same chat. The last 30 messages of the chat go along with the question. |
 | **Chats** | The sidebar lists them by date, with search, rename and delete. **New chat** starts without any earlier context. |
 | **Answers** | Rendered as Markdown: headings, lists, tables, code blocks with a **Copy** button. |
-| **Settings** | Theme, access code, backend URL, and export, import or delete of all chats. |
+| **Settings** | Theme, access code, and export, import or delete of all chats. The backend's address is never shown and cannot be changed in the page. |
 | **Move to another device** | Settings > **Export** on the old device, **Import** on the new one. There is no account and no sync. |
 
 What ends a chat's memory: deleting the chat, clearing the browser's site data, a private window being closed, or using another browser or device.
 
 ---
 
-## 5. Run it locally
+## 6. Run it locally
 
 ```bash
 # terminal 1: the backend, with the UI's local address allowed
@@ -138,7 +158,21 @@ BACKEND_URL=http://localhost:8080 npm start                                     
 
 ---
 
-## 6. What to know about privacy and safety
+## 7. How streaming works
+
+| Step | What happens |
+|---|---|
+| Page | `POST /api/stream` with the chat's messages. Falls back to `POST /api/chat` (the whole answer at once) if the backend is older or the browser can't read streams. |
+| Backend | Asks the AI provider for a streamed reply and sends server-sent events: `data: {"delta": "text"}` for each piece, then `data: {"done": true, "answer": "the whole answer"}`, or `data: {"error": "..."}`. |
+| Provider | Claude and the OpenAI-compatible providers (Groq, Gemini, OpenAI, Azure, OpenRouter, Mistral, Ollama, custom) stream. **Cursor does not**: its answer arrives in one piece after the wait. If a provider refuses to stream, the backend asks again without streaming. |
+
+Streaming does not make the model faster. The first words appear after a second or two and the rest follows; the total time is the same. Teams still gets the whole answer as cards.
+
+A proxy in front of the backend must not buffer or compress `text/event-stream` replies, or the words arrive all at once.
+
+---
+
+## 8. What to know about privacy and safety
 
 - **On the device:** all chats, the access code and the settings, in `localStorage` of the UI's address. Anyone who can use that browser profile can read them. Nothing is encrypted.
 - **Sent to the backend:** the question and the earlier messages of that chat, and the access code. The backend passes the conversation to the AI provider and returns the answer. It writes no conversation to disk and keeps none in memory after the answer.
@@ -149,11 +183,11 @@ BACKEND_URL=http://localhost:8080 npm start                                     
 
 ---
 
-## 7. Troubleshooting
+## 9. Troubleshooting
 
 | Symptom | Cause and fix |
 |---|---|
-| "Can't reach PQ at ..." | Wrong `BACKEND_URL` (rebuild the UI after changing it), the backend is down, or a free Render service is asleep and needs up to a minute for the first request. |
+| "Can't reach PQ right now" or "PQ is not reachable right now" | Wrong `BACKEND_URL` (rebuild the UI after changing it), the backend is down, or a free Render service is asleep and needs up to a minute for the first request. |
 | The browser console shows a CORS error | `WEB_UI` on the backend doesn't match the UI's address exactly (scheme and host, e.g. `https://pq-ui.onrender.com`). Redeploy the backend after changing it. |
 | "This PQ needs an access code." | Enter the code under Settings, **Access code**. |
 | "No AI model is configured ..." | `LLM_PROVIDER` or its key is missing on the backend. |

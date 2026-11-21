@@ -198,3 +198,39 @@ class OpenAICompatibleProvider(ChatProvider):
                 continue
             break
         raise ProviderError(f"{self.title} API error ({self.base_url}): {last_error}")
+
+    def _stream(self, system, messages, tools):
+        """Chat Completions with "stream": true. The server sends lines "data: {...}" with a
+        piece of text each, and "data: [DONE]" at the end. One attempt: anything but a 200
+        raises, and base.stream() then asks again with create(), which has the retries."""
+        payload = {**self._payload(system, messages, tools, None, self.limits.request_chars), "stream": True}
+        try:
+            r = requests.post(f"{self.base_url}/chat/completions", json=payload, headers=self._headers(),
+                              timeout=self.limits.timeout, stream=True)
+        except requests.RequestException as e:
+            raise ProviderError(f"{self.title} API error ({self.base_url}): {type(e).__name__}") from None
+        try:
+            if r.status_code != 200:
+                raise ProviderError(f"{self.title} API error ({self.base_url}): HTTP {r.status_code}")
+            parts, finish = [], None
+            for raw in r.iter_lines():
+                line = raw.decode("utf-8", "replace").strip() if isinstance(raw, bytes) else str(raw).strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    choice = (json.loads(data).get("choices") or [{}])[0]
+                except (json.JSONDecodeError, AttributeError):
+                    continue
+                finish = choice.get("finish_reason") or finish
+                piece = (choice.get("delta") or {}).get("content")
+                if piece:
+                    parts.append(piece)
+                    yield piece
+        finally:
+            r.close()
+        stop = {"stop": "end_turn", "length": "max_tokens", "content_filter": "refusal"}.get(finish, "end_turn")
+        text = "".join(parts)
+        yield response(stop, [NS(type="text", text=text)] if text else [])

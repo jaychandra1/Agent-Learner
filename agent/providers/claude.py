@@ -24,13 +24,31 @@ class ClaudeProvider(ChatProvider):
         # their fallback model within the same call. "off" disables it
         self.fallbacks = "" if fallbacks.lower() in ("", "off", "none", "false", "0") else fallbacks
 
-    def create(self, system, messages, tools, require_tool=None):
+    def _params(self, system, messages, tools) -> dict:
         params = {"model": self.model, "max_tokens": self.limits.output_tokens, "system": system,
                   "messages": messages}
         if tools:
             params["tools"] = tools
         if self.effort:
             params["output_config"] = {"effort": self.effort}
+        return params
+
+    def create(self, system, messages, tools, require_tool=None):
+        params = self._params(system, messages, tools)
         if self.fallbacks:
             return self._client.beta.messages.create(betas=[FALLBACK_BETA], fallbacks=self.fallbacks, **params)
         return self._client.messages.create(**params)
+
+    def _stream(self, system, messages, tools):
+        """The SDK's streaming helper: text as it is written, then the complete message
+        (with its thinking blocks, which go back into the history as they are)."""
+        params = self._params(system, messages, tools)
+        if self.fallbacks:
+            manager = self._client.beta.messages.stream(betas=[FALLBACK_BETA], fallbacks=self.fallbacks, **params)
+        else:
+            manager = self._client.messages.stream(**params)
+        with manager as stream:
+            for text in stream.text_stream:
+                if text:
+                    yield text
+            yield stream.get_final_message()

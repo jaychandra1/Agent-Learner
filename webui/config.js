@@ -1,4 +1,4 @@
-// Where the PQ backend lives. `npm run build` writes this file into dist/ from the
-// BACKEND_URL environment variable of the service that hosts the UI. Left empty, the UI
-// uses the URL typed under Settings, or the address it was loaded from.
+// Where the page sends questions. `npm run build` writes this file into dist/.
+// Empty = the page's own address: the host passes questions on to the backend (api/chat.js
+// on Vercel), so the backend's address is not in the page at all.
 window.PQ_CONFIG = { BACKEND_URL: "" };

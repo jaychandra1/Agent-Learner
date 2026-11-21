@@ -216,7 +216,22 @@ def test_ui_stores_chats_on_the_device_and_calls_only_the_backend():
     assert "localStorage" in app_js and '"/api/chat"' in app_js and "X-Access-Code" in app_js
     # no third-party script, font or style is loaded: the page talks to the backend and nothing else
     page = files["index.html"]
-    assert "http://" not in page.replace("http://www.w3.org/2000/svg", "") and "https://" not in page.replace(
-        "https://your-pq.onrender.com", "")
+    assert "http://" not in page.replace("http://www.w3.org/2000/svg", "") and "https://" not in page
     assert json.loads(files["package.json"])["scripts"]["build"] == "node build.mjs"
     assert "process.env.BACKEND_URL" in files["build.mjs"]
+
+
+def test_ui_never_shows_where_the_backend_is():
+    page = (WEBUI_DIR / "index.html").read_text(encoding="utf-8")
+    app_js = (WEBUI_DIR / "app.js").read_text(encoding="utf-8")
+    assert "Backend URL" not in page and "backendUrl" not in page and "onrender" not in page
+    assert "settings.backendUrl" not in app_js and "Backend URL" not in app_js
+    for line in app_js.splitlines():   # no message, hint or toast is built from the address
+        if "backendUrl()" in line:
+            assert "fetch(" in line or "function backendUrl" in line, line
+    # on Vercel the address stays on the server: the proxy reads it, the built page does not get it
+    proxy = (WEBUI_DIR / "api" / "chat.js").read_text(encoding="utf-8")
+    assert "process.env.BACKEND_URL" in proxy and "x-access-code" in proxy
+    assert "process.env.VERCEL" in (WEBUI_DIR / "build.mjs").read_text(encoding="utf-8")
+    vercel = json.loads((WEBUI_DIR / "vercel.json").read_text(encoding="utf-8"))
+    assert vercel["outputDirectory"] == "dist" and "api/chat.js" in vercel["functions"]

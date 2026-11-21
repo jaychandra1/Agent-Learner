@@ -8,8 +8,11 @@ Both get the same system prompt and conversation, so agent.py can treat them mor
 the same. Both can take tool definitions too; PQ passes none, it answers from the model's
 knowledge.
 """
+import logging
 from dataclasses import dataclass, replace
 from types import SimpleNamespace
+
+logger = logging.getLogger("pq.llm")
 
 
 class ProviderError(RuntimeError):
@@ -51,6 +54,37 @@ class ChatProvider(Provider):
         """One model call. messages are in the Anthropic Messages shape (that's how agent.py
         keeps the history). require_tool makes the model call that tool now, where the API
         supports it. tools may be empty. Returns response(...)."""
+        raise NotImplementedError
+
+
+    def stream(self, system: str, messages: list, tools: list):
+        """The same call as create(), piece by piece: yields the text as it is written (str)
+        and, as the last item, the complete response(...).
+
+        A provider that can stream implements _stream(). If that fails before the first
+        piece of text (the API or an SDK version doesn't support it, a rate limit, ...) the
+        answer is fetched with create() instead, which has the retries. After the first
+        piece an error is raised: the person has already seen half an answer."""
+        started = False
+        try:
+            for item in self._stream(system, messages, tools):
+                started = started or isinstance(item, str)
+                yield item
+            return
+        except NotImplementedError:
+            pass
+        except Exception as e:
+            if started:
+                raise
+            logger.info("%s: streaming not available (%s), answering in one piece", self.title, type(e).__name__)
+        resp = self.create(system, messages, tools)
+        text = "".join(getattr(b, "text", "") or "" for b in resp.content or [] if getattr(b, "type", "") == "text")
+        if text:
+            yield text
+        yield resp
+
+    def _stream(self, system: str, messages: list, tools: list):
+        """Yield text pieces (str) and then the complete response(...). Optional."""
         raise NotImplementedError
 
 

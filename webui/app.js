@@ -8,10 +8,10 @@
   const SETTINGS_KEY = "pq.settings.v1";
   const CONTEXT_MESSAGES = 30;      // messages of the chat sent along with a question
   const SUGGESTIONS = [
-    "What is a Kubernetes operator, with a real-time scenario?",
-    "Explain how HTTPS works, step by step",
-    "Kafka vs RabbitMQ: when do I choose which?",
-    "Quiz me on SQL joins",
+    { tag: "Understand", text: "What is a Kubernetes operator, with a real-time scenario?" },
+    { tag: "Step by step", text: "Explain how HTTPS works, step by step" },
+    { tag: "Compare", text: "Kafka vs RabbitMQ: when do I choose which?" },
+    { tag: "Practice", text: "Quiz me on SQL joins" },
   ];
 
   const $ = function (id) { return document.getElementById(id); };
@@ -19,8 +19,8 @@
     app: $("app"), sidebar: $("sidebar"), scrim: $("scrim"), chatList: $("chatList"), search: $("search"),
     scroll: $("scroll"), welcome: $("welcome"), thread: $("thread"), suggestions: $("suggestions"),
     title: $("chatTitle"), composer: $("composer"), input: $("input"), send: $("send"), toast: $("toast"),
-    settings: $("settings"), theme: $("theme"), accessCode: $("accessCode"), backendUrl: $("backendUrl"),
-    backendHint: $("backendHint"), storageInfo: $("storageInfo"), importFile: $("importFile"),
+    settings: $("settings"), theme: $("theme"), accessCode: $("accessCode"),
+    storageInfo: $("storageInfo"), importFile: $("importFile"),
   };
 
   // ---------- storage (this device only) ----------
@@ -49,9 +49,10 @@
   }
 
   let chats = load(CHATS_KEY, []).filter(function (c) { return c && c.id && Array.isArray(c.messages); });
-  let settings = Object.assign({ theme: "system", accessCode: "", backendUrl: "" }, load(SETTINGS_KEY, {}));
+  let settings = Object.assign({ theme: "system", accessCode: "" }, load(SETTINGS_KEY, {}));
   let currentId = null;
   let pending = null;               // {chatId, controller} while an answer is on its way
+  let shown = { id: null, count: 0 };   // what the thread showed last, to animate only what is new
 
   function saveChats() { save(CHATS_KEY, chats); }
   function currentChat() { return chats.find(function (c) { return c.id === currentId; }) || null; }
@@ -59,31 +60,81 @@
 
   // ---------- backend ----------
 
+  // Where questions go. Empty in the page's config means this site's own address: the host
+  // then passes them on (api/chat.js) and the backend's address never reaches the browser.
+  // It is never shown anywhere in the page, and people cannot change it.
   function backendUrl() {
     const configured = (window.PQ_CONFIG && window.PQ_CONFIG.BACKEND_URL) || "";
-    return (settings.backendUrl || configured || window.location.origin).replace(/\/+$/, "");
+    return (configured || window.location.origin).replace(/\/+$/, "");
   }
 
-  async function ask(messages, signal) {
+  async function post(path, messages, signal) {
     const headers = { "Content-Type": "application/json" };
     if (settings.accessCode) headers["X-Access-Code"] = settings.accessCode;
-    let response;
     try {
-      response = await fetch(backendUrl() + "/api/chat", {
+      return await fetch(backendUrl() + path, {
         method: "POST", headers: headers, signal: signal, body: JSON.stringify({ messages: messages }),
       });
     } catch (e) {
       if (e.name === "AbortError") throw e;
-      throw new Error("Can't reach PQ at " + backendUrl() + ". Check your connection, or the Backend URL in Settings. " +
-                      "A sleeping free service can take a minute to wake up.");
+      throw new Error("Can't reach PQ right now. Check your connection and try again. " +
+                      "A sleeping service can take a minute to wake up.");
     }
+  }
+
+  async function failure(response) {
     let data = null;
     try { data = await response.json(); } catch (e) { /* not JSON */ }
-    if (response.ok && data && typeof data.answer === "string") return data.answer;
     const detail = data && typeof data.detail === "string" ? data.detail : "";
     const error = new Error(detail || ("PQ answered with an error (" + response.status + ")."));
     error.status = response.status;
-    throw error;
+    return error;
+  }
+
+  // The whole answer in one piece. Used when the backend can't stream.
+  async function askWhole(messages, signal) {
+    const response = await post("/api/chat", messages, signal);
+    if (!response.ok) throw await failure(response);
+    const data = await response.json();
+    if (data && typeof data.answer === "string") return data.answer;
+    throw new Error("PQ answered with something unexpected.");
+  }
+
+  // The answer while it is written. onText gets everything written so far, again and again.
+  // The server sends events: data: {"delta": "..."} ... data: {"done": true, "answer": "..."}
+  async function ask(messages, signal, onText) {
+    const response = await post("/api/stream", messages, signal);
+    if (response.status === 404 || response.status === 405) return askWhole(messages, signal);   // an older backend
+    if (!response.ok) throw await failure(response);
+    if (!response.body || !response.body.getReader) return askWhole(messages, signal);           // a very old browser
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let text = "";
+    for (;;) {
+      const chunk = await reader.read();
+      buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done });
+      const events = buffer.split(/\r?\n\r?\n/);
+      buffer = events.pop();                       // the last one may be half an event
+      for (const event of events) {
+        const line = event.split(/\r?\n/).find(function (l) { return l.startsWith("data:"); });
+        if (!line) continue;
+        let data;
+        try { data = JSON.parse(line.slice(5)); } catch (e) { continue; }
+        if (typeof data.delta === "string") {
+          text += data.delta;
+          onText(text);
+        } else if (data.done) {
+          return typeof data.answer === "string" ? data.answer : text;
+        } else if (data.error) {
+          throw new Error(String(data.error));
+        }
+      }
+      if (chunk.done) break;
+    }
+    if (text.trim()) return text;                  // the connection ended without the last event
+    throw new Error("PQ stopped before it answered. Please try again.");
   }
 
   // ---------- rendering ----------
@@ -205,15 +256,58 @@
     el.thread.textContent = "";
     messages.forEach(function (m, i) { el.thread.appendChild(messageNode(m, i)); });
     if (pending && chat && pending.chatId === chat.id) {
-      const wait = document.createElement("article");
-      wait.className = "msg assistant waiting";
-      wait.innerHTML = '<span class="logo small" aria-hidden="true">PQ</span><div class="body"><div class="typing" ' +
-        'aria-label="PQ is writing"><span></span><span></span><span></span></div>' +
-        '<p class="wait-note">Writing a full explanation can take up to a minute.</p></div>';
-      el.thread.appendChild(wait);
+      pending.live = null;
+      if (pending.text) {
+        el.thread.appendChild(liveNode());
+      } else {
+        const wait = document.createElement("article");
+        wait.className = "msg assistant waiting";
+        wait.innerHTML = '<span class="logo small" aria-hidden="true">PQ</span><div class="body"><div class="typing" ' +
+          'aria-label="PQ is thinking"><span></span><span></span><span></span></div></div>';
+        el.thread.appendChild(wait);
+      }
     }
+    // only a message that was just added slides in; opening a chat shows it at once
+    const count = el.thread.children.length;
+    const id = chat ? chat.id : null;
+    if (id && id === shown.id && count > shown.count && el.thread.lastElementChild) {
+      el.thread.lastElementChild.classList.add("enter");
+      if (count - shown.count > 1) el.thread.children[count - 2].classList.add("enter");
+    }
+    shown = { id: id, count: count };
     setBusy(Boolean(pending));
     if (scrollToEnd !== false) el.scroll.scrollTop = el.scroll.scrollHeight;
+  }
+
+  // The message PQ is writing right now. Only its text changes while pieces arrive.
+  function liveNode() {
+    const wrap = document.createElement("article");
+    wrap.className = "msg assistant streaming";
+    wrap.innerHTML = '<span class="logo small" aria-hidden="true">PQ</span><div class="body"><div class="content"></div></div>';
+    pending.live = wrap.querySelector(".content");
+    pending.live.innerHTML = window.PQMarkdown.render(pending.text);
+    return wrap;
+  }
+
+  // Called for every piece of text. Draws at most once per frame, and keeps the view at the
+  // end only while the person has not scrolled up to read.
+  function paintLive() {
+    if (!pending || pending.frame) return;
+    pending.frame = requestAnimationFrame(function () {
+      if (!pending) return;
+      pending.frame = 0;
+      if (pending.chatId !== currentId) return;          // another chat is open: it is drawn when they come back
+      const atEnd = el.scroll.scrollHeight - el.scroll.scrollTop - el.scroll.clientHeight < 140;
+      if (pending.live && pending.live.isConnected) {
+        pending.live.innerHTML = window.PQMarkdown.render(pending.text);
+      } else {
+        const wait = el.thread.querySelector(".waiting");
+        if (wait) wait.replaceWith(liveNode());
+        else el.thread.appendChild(liveNode());
+        shown.count = el.thread.children.length;
+      }
+      if (atEnd) el.scroll.scrollTop = el.scroll.scrollHeight;
+    });
   }
 
   function setBusy(busy) {
@@ -291,17 +385,25 @@
 
   async function answer(chat) {
     const controller = new AbortController();
-    pending = { chatId: chat.id, controller: controller };
+    const mine = pending = { chatId: chat.id, controller: controller, text: "", live: null, frame: 0 };
     renderList();
     renderThread();
     try {
-      const text = await ask(contextOf(chat), controller.signal);
+      const text = await ask(contextOf(chat), controller.signal, function (soFar) {
+        mine.text = soFar;
+        paintLive();
+      });
       chat.messages.push({ role: "assistant", content: text, ts: Date.now() });
     } catch (e) {
-      if (e.name !== "AbortError") {
+      if (mine.text.trim()) {
+        // Stop was pressed, or the connection broke, after part of the answer arrived: keep that part
+        chat.messages.push({ role: "assistant", content: mine.text.trim(), ts: Date.now() });
+        if (e.name !== "AbortError") toast("The answer was interrupted. Ask \"continue\" for the rest.", 5000);
+      } else if (e.name !== "AbortError") {
         chat.messages.push({ role: "assistant", content: e.message, ts: Date.now(), error: true, status: e.status || 0 });
       }
     }
+    if (mine.frame) cancelAnimationFrame(mine.frame);
     pending = null;
     chat.updated = Date.now();
     saveChats();
@@ -368,9 +470,6 @@
   function openSettings() {
     el.theme.value = settings.theme;
     el.accessCode.value = settings.accessCode;
-    el.backendUrl.value = settings.backendUrl;
-    const configured = (window.PQ_CONFIG && window.PQ_CONFIG.BACKEND_URL) || "";
-    el.backendHint.textContent = configured ? "Leave empty to use " + configured + "." : "Where your PQ backend runs.";
     let bytes = 0;
     try { bytes = (localStorage.getItem(CHATS_KEY) || "").length; } catch (e) { /* blocked */ }
     el.storageInfo.textContent = chats.length + (chats.length === 1 ? " chat, " : " chats, ") +
@@ -452,7 +551,7 @@
   $("openSettings").addEventListener("click", openSettings);
   $("cancelSettings").addEventListener("click", function () { el.settings.close(); });
   $("settingsForm").addEventListener("submit", function () {
-    settings = { theme: el.theme.value, accessCode: el.accessCode.value.trim(), backendUrl: el.backendUrl.value.trim() };
+    settings = { theme: el.theme.value, accessCode: el.accessCode.value.trim() };
     save(SETTINGS_KEY, settings);
     applyTheme();
     toast("Settings saved.");
@@ -484,12 +583,18 @@
 
   // ---------- start ----------
 
-  SUGGESTIONS.forEach(function (text) {
+  SUGGESTIONS.forEach(function (s) {
     const chip = document.createElement("button");
     chip.type = "button";
     chip.className = "chip";
-    chip.textContent = text;
-    chip.addEventListener("click", function () { submit(text); });
+    const tag = document.createElement("span");
+    tag.className = "chip-tag";
+    tag.textContent = s.tag;
+    const text = document.createElement("span");
+    text.className = "chip-text";
+    text.textContent = s.text;
+    chip.append(tag, text);
+    chip.addEventListener("click", function () { submit(s.text); });
     el.suggestions.appendChild(chip);
   });
   applyTheme();

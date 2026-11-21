@@ -13,6 +13,13 @@ import agent
 import teams
 
 
+def _say(history, question):
+    """Print the answer while the model writes it."""
+    for piece in agent.chat_stream(history, question):
+        print(piece, end="", flush=True)
+    print()
+
+
 def main():
     parser = argparse.ArgumentParser(description="PQ - a technical teacher for any technology")
     sub = parser.add_subparsers(dest="command")
@@ -26,7 +33,7 @@ def main():
     args = parser.parse_args()
 
     if args.command == "ask":
-        print(agent.chat([], " ".join(args.question)))
+        _say([], " ".join(args.question))
 
     elif args.command == "chat":
         history = []
@@ -38,7 +45,8 @@ def main():
                 break
             if not question:
                 break
-            print("\n" + agent.chat(history, question))
+            print()
+            _say(history, question)
 
     elif args.command == "teams-test":
         print(teams.post_test() or "TEAMS_REPLY_WEBHOOK_URL is not set.")

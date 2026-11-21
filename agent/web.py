@@ -5,6 +5,9 @@ device and sends the conversation along with each question, so nothing is stored
 
     POST /api/chat   {"messages": [{"role": "user" | "assistant", "content": "..."}, ...]}
                      -> {"answer": "..."}            the last message is the new question
+    POST /api/stream the same question, answered while the model writes (server-sent events):
+                     data: {"delta": "text"} ... then data: {"done": true, "answer": "all of it"}
+                     or data: {"error": "..."}
     GET  /api/health -> {"status": "ok", ...}        also what a hosting platform can probe
 
 Served on the public port only (app.public_app). It is off until WEB_UI names the UI's
@@ -20,6 +23,7 @@ An open endpoint in front of a paid AI model needs some care:
 People on the web UI are treated like people in Teams: the boundaries apply (boundaries.py).
 """
 import hmac
+import json
 import logging
 import os
 import re
@@ -29,6 +33,7 @@ from collections import defaultdict, deque
 from typing import Literal
 
 from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 import agent
@@ -169,3 +174,54 @@ def chat(body: ChatIn, request: Request, x_access_code: str = Header(None)):
         teams.report_restricted(sender, question, boundaries.REASON_AI, "AI rule")
         answer = boundaries.REFUSAL
     return {"answer": answer}
+
+
+def _event(data: dict) -> str:
+    return "data: " + json.dumps(data, ensure_ascii=False) + "\n\n"
+
+
+# no proxy on the way may hold the pieces back or compress them into one block
+_STREAM_HEADERS = {"Cache-Control": "no-cache, no-transform", "X-Accel-Buffering": "no"}
+
+
+@router.post("/stream")
+def stream(body: ChatIn, request: Request, x_access_code: str = Header(None)):
+    """Like /api/chat, but the answer arrives while it is written. Anything wrong with the
+    request itself is an ordinary error reply; what goes wrong later is an "error" event."""
+    _guard(x_access_code)
+    client = _client(request)
+    _rate_limit(client)
+    history, question = conversation(body.messages)
+    sender = {"name": "Web UI user", "aadObjectId": client}
+    logger.info("Web question, streamed (%d characters, %d earlier messages)", len(question), len(history))
+
+    reason = boundaries.restricted_question(question)
+    if reason:
+        teams.report_restricted(sender, question, reason, "question filter")
+        return StreamingResponse(iter([_event({"done": True, "answer": boundaries.REFUSAL})]),
+                                 media_type="text/event-stream", headers=_STREAM_HEADERS)
+    if not agent.llm:
+        raise HTTPException(status_code=503, detail=agent.NO_MODEL)
+
+    def events():
+        # the slot is taken in here, so it is always given back, also when the person leaves
+        if not _slots.acquire(blocking=False):
+            yield _event({"error": "PQ is busy with other questions. Please try again in a minute."})
+            return
+        parts = []
+        try:
+            for piece in agent.chat_stream(history, question, restricted=boundaries.ENABLED):
+                parts.append(piece)
+                yield _event({"delta": piece})
+            answer = "".join(parts).strip()
+            if boundaries.is_refusal(answer):  # the model refused (its boundary rule), show only that
+                teams.report_restricted(sender, question, boundaries.REASON_AI, "AI rule")
+                answer = boundaries.REFUSAL
+            yield _event({"done": True, "answer": answer})
+        except Exception as e:  # the raw error can name the AI provider: log only
+            logger.exception("Web request failed")
+            yield _event({"error": f"Sorry, that failed ({type(e).__name__}). Please try again."})
+        finally:
+            _slots.release()
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers=_STREAM_HEADERS)

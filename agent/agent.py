@@ -122,9 +122,12 @@ _EXAMPLE_MARK = "\n\nExample of rule 2"
 SYSTEM_RESTRICTED = SYSTEM.replace(_EXAMPLE_MARK, BOUNDARY_RULE + _EXAMPLE_MARK, 1)
 
 
-def _system() -> str:
-    """System prompt for the current request, with rule 12 when it comes from Teams."""
-    return SYSTEM_RESTRICTED if boundaries.is_restricted() else SYSTEM
+def _system(restricted: bool | None = None) -> str:
+    """System prompt for the current request, with rule 12 when it comes from Teams or the
+    web UI. restricted=None takes that from the current request (boundaries.restricted_access)."""
+    if restricted is None:
+        restricted = boundaries.is_restricted()
+    return SYSTEM_RESTRICTED if restricted else SYSTEM
 
 
 NO_MODEL = "No AI model is configured, so I can't answer questions yet. Please ask an administrator."
@@ -190,11 +193,11 @@ def trim_history(messages: list, keep: int = 20, max_chars: int = 0) -> list:
     return kept
 
 
-def _history_budget() -> int:
+def _history_budget(system: str | None = None) -> int:
     """Characters of conversation one request may carry. Providers with a request size limit
     (free plans) get the history cut to what is left after the rules."""
     limit = llm.limits.request_chars
-    return max(limit - len(_system()) - 500, 2000) if limit else 0
+    return max(limit - len(system or _system()) - 500, 2000) if limit else 0
 
 
 def _chat(messages, user_text) -> str:
@@ -216,12 +219,12 @@ def _chat(messages, user_text) -> str:
     return answer
 
 
-def _agent_chat(messages, user_text) -> str:
+def _agent_chat(messages, user_text, system: str | None = None) -> str:
     """One agent run (Cursor): a single message with the recent conversation and the question."""
     earlier = _transcript(messages)
     prompt = f"Conversation so far:\n{earlier}\n\nNew question: {user_text}" if earlier else user_text
     messages[:] = trim_history(messages, keep=20)
-    with llm.session(_system(), [], lambda name, args: NO_TOOLS) as session:
+    with llm.session(system or _system(), [], lambda name, args: NO_TOOLS) as session:
         answer = (session.send(prompt) or "").strip()
     if not answer:
         return NO_ANSWER
@@ -236,3 +239,50 @@ def chat(messages, user_text) -> str:
         return NO_MODEL
     logger.info("Answering with %s, model %s", llm.title, llm.model)
     return _agent_chat(messages, user_text) if llm.kind == "agent" else _chat(messages, user_text)
+
+
+def chat_stream(messages, user_text, restricted: bool | None = None):
+    """chat(), piece by piece: yields the answer as text while the model writes it. Joined
+    together the pieces are the complete answer. messages is updated like in chat().
+
+    This is a generator and the caller may run each step on another thread, so whether the
+    boundaries apply is passed in (restricted) and not read from the request's context.
+    Agent providers (Cursor) don't stream: their answer arrives as one piece."""
+    if not llm:
+        yield NO_MODEL
+        return
+    system = _system(restricted)
+    logger.info("Answering with %s, model %s (streaming)", llm.title, llm.model)
+    if llm.kind == "agent":
+        yield _agent_chat(messages, user_text, system)
+        return
+
+    messages.append({"role": "user", "content": user_text})
+    messages[:] = trim_history(messages, keep=20, max_chars=_history_budget(system))
+    parts, resp = [], None
+    try:
+        if hasattr(llm, "stream"):
+            for item in llm.stream(system, messages, []):
+                if isinstance(item, str):
+                    parts.append(item)
+                    yield item
+                else:
+                    resp = item
+        else:
+            resp = llm.create(system, messages, [])
+            if _text(resp):
+                parts.append(_text(resp))
+                yield parts[-1]
+    except BaseException:  # also when the person pressed Stop: the caller closes the generator
+        messages.pop()     # the question was not answered: keep the history as it was
+        raise
+    answer = "".join(parts).strip()
+    stop = getattr(resp, "stop_reason", "end_turn")
+    if stop == "refusal" or not answer:
+        messages.pop()
+        yield ("\n\n" if answer else "") + (DECLINED if stop == "refusal" else NO_ANSWER)
+        return
+    content = getattr(resp, "content", None) or [{"type": "text", "text": answer}]
+    messages.append({"role": "assistant", "content": content})
+    if stop == "max_tokens":
+        yield "\n\n" + CUT_OFF

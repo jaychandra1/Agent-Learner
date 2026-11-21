@@ -86,7 +86,7 @@ To keep questions inside your own network, use a self-hosted model through `olla
 
 ## 4. Things to know
 
-- **The web UI's API is public when `WEB_UI` is set.** `POST /api/chat` on the public port takes a conversation from the browser and stores nothing. `WEB_UI` limits which websites may call it from a browser; it is not a login. Set `WEB_ACCESS_CODE` so that only people with the code can use your AI provider's quota, and keep `WEB_RATE_PER_MINUTE` low. The boundaries apply as in Teams. Details: [WEB_UI.md](WEB_UI.md), section 6.
+- **The web UI's API is public when `WEB_UI` is set.** `POST /api/chat` on the public port takes a conversation from the browser and stores nothing. `WEB_UI` limits which websites may call it from a browser; it is not a login. Set `WEB_ACCESS_CODE` so that only people with the code can use your AI provider's quota, and keep `WEB_RATE_PER_MINUTE` low. The boundaries apply as in Teams. Details: [WEB_UI.md](WEB_UI.md), section 8.
 
 - **What the boundaries guarantee.** PQ has nothing to give away: it has no tools, reads no files and no cluster, and the model is never shown keys, webhook URLs or settings. The most a clever question could get out of the AI model is what the model itself was given, which is its rules (they are in [RULES.md](RULES.md)) and the protected namespace names. The question filter and the AI's rule are best effort: they recognise wording, and wording can be varied.
 - **Send the notices to a private place.** Set `TEAMS_SECURITY_WEBHOOK_URLS` to a channel or chat that only administrators can read. Without it, refusals are only logged and kept in `GET /security/restricted`. Never point it at the questions channel.
