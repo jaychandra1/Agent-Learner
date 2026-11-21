@@ -18,7 +18,7 @@
   const el = {
     app: $("app"), sidebar: $("sidebar"), scrim: $("scrim"), chatList: $("chatList"), search: $("search"),
     scroll: $("scroll"), welcome: $("welcome"), thread: $("thread"), suggestions: $("suggestions"),
-    title: $("chatTitle"), composer: $("composer"), input: $("input"), send: $("send"), toast: $("toast"),
+    title: $("chatTitle"), composer: $("composer"), input: $("input"), send: $("send"), mic: $("mic"), toast: $("toast"),
     settings: $("settings"), theme: $("theme"), accessCode: $("accessCode"),
     storageInfo: $("storageInfo"), importFile: $("importFile"),
   };
@@ -465,6 +465,84 @@
     setBusy(Boolean(pending));
   }
 
+  // ---------- speaking a question ----------
+  // The browser's own speech recognition turns speech into text in the question box. PQ's
+  // backend is not involved and gets only the text that is sent afterwards. Nothing is sent
+  // on its own: the person reads what was heard, corrects it, and presses Send.
+  // (How the browser recognises speech is up to the browser: Chrome and Edge use their
+  // vendor's online service for it.) Browsers without it don't show the button.
+
+  const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  let listening = null;             // {recognition, before, heard} while the microphone is on
+
+  function stopListening() {
+    if (listening) listening.recognition.stop();
+  }
+
+  function startListening() {
+    const recognition = new Recognition();
+    recognition.lang = document.documentElement.lang === "en" ? (navigator.language || "en-US") : document.documentElement.lang;
+    recognition.continuous = true;      // keep listening through pauses, until the button is pressed again
+    recognition.interimResults = true;  // show the words while they are spoken
+    const before = el.input.value.trim();
+    const mine = listening = { recognition: recognition, before: before, heard: "" };
+
+    recognition.onresult = function (e) {
+      if (mine.sent) return;            // the question went out already: late words don't refill the box
+      let fixed = "";
+      let unsure = "";
+      for (let i = 0; i < e.results.length; i++) {
+        if (e.results[i].isFinal) fixed += e.results[i][0].transcript;
+        else unsure += e.results[i][0].transcript;
+      }
+      mine.heard = (fixed + unsure).replace(/\s+/g, " ").trim();
+      el.input.value = (before ? before + " " : "") + mine.heard;
+      growInput();
+      el.input.scrollTop = el.input.scrollHeight;
+    };
+    recognition.onerror = function (e) {
+      const why = {
+        "not-allowed": "The microphone is blocked for this site. Allow it in the browser's address bar and try again.",
+        "service-not-allowed": "Speech recognition is switched off in this browser.",
+        "audio-capture": "No microphone was found.",
+        "network": "Speech recognition needs an internet connection.",
+        "no-speech": "I didn't hear anything. Press the microphone and speak.",
+      }[e.error];
+      if (why) toast(why, 5000);
+    };
+    recognition.onend = function () {
+      if (listening === mine) listening = null;
+      el.mic.classList.remove("listening");
+      el.mic.setAttribute("aria-pressed", "false");
+      el.mic.setAttribute("aria-label", "Speak your question");
+      el.mic.title = "Speak your question";
+      el.input.placeholder = "Ask a technical question";
+      growInput();
+      if (mine.heard) el.input.focus();
+    };
+
+    try {
+      recognition.start();
+    } catch (e) {
+      listening = null;
+      toast("The microphone could not be started.");
+      return;
+    }
+    el.mic.classList.add("listening");
+    el.mic.setAttribute("aria-pressed", "true");
+    el.mic.setAttribute("aria-label", "Stop listening");
+    el.mic.title = "Stop listening";
+    el.input.placeholder = "Listening… speak your question";
+  }
+
+  if (Recognition && el.mic) {
+    el.mic.hidden = false;
+    el.mic.addEventListener("click", function () {
+      if (listening) stopListening();
+      else startListening();
+    });
+  }
+
   // ---------- settings ----------
 
   function openSettings() {
@@ -522,6 +600,8 @@
   el.composer.addEventListener("submit", function (e) {
     e.preventDefault();
     if (pending) { pending.controller.abort(); return; }   // the button is "Stop" while waiting
+    if (listening) listening.sent = true;
+    stopListening();
     const text = el.input.value.trim();
     if (!text) return;
     el.input.value = "";

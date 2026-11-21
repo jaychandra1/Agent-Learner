@@ -235,3 +235,11 @@ def test_ui_never_shows_where_the_backend_is():
     assert "process.env.VERCEL" in (WEBUI_DIR / "build.mjs").read_text(encoding="utf-8")
     vercel = json.loads((WEBUI_DIR / "vercel.json").read_text(encoding="utf-8"))
     assert vercel["outputDirectory"] == "dist" and "api/chat.js" in vercel["functions"]
+
+
+def test_microphone_turns_speech_into_text_in_the_browser_only():
+    page = (WEBUI_DIR / "index.html").read_text(encoding="utf-8")
+    app_js = (WEBUI_DIR / "app.js").read_text(encoding="utf-8")
+    assert 'id="mic"' in page and "hidden" in page.split('id="mic"')[1].split(">")[0]  # shown only where it works
+    assert "SpeechRecognition" in app_js and "webkitSpeechRecognition" in app_js
+    assert "getUserMedia" not in app_js and "MediaRecorder" not in app_js  # no audio is recorded or uploaded by PQ

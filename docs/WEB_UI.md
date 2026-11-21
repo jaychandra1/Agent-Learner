@@ -134,6 +134,7 @@ A host without a build step can serve the `webui/` folder as it is: edit `BACKEN
 | | |
 |---|---|
 | **Ask** | Type a question, Enter sends, Shift+Enter starts a new line. The round button becomes **Stop** while PQ writes. |
+| **Speak** | The microphone button turns speech into text in the question box. Press it again to stop, correct the text if needed, then send. It appears only in browsers that support speech recognition (Chrome, Edge, Safari; not Firefox) and the browser asks for microphone permission the first time. The page must be served over `https`. |
 | **Follow up** | Ask in the same chat. The last 30 messages of the chat go along with the question. |
 | **Chats** | The sidebar lists them by date, with search, rename and delete. **New chat** starts without any earlier context. |
 | **Answers** | Rendered as Markdown: headings, lists, tables, code blocks with a **Copy** button. |
@@ -176,6 +177,7 @@ A proxy in front of the backend must not buffer or compress `text/event-stream` 
 
 - **On the device:** all chats, the access code and the settings, in `localStorage` of the UI's address. Anyone who can use that browser profile can read them. Nothing is encrypted.
 - **Sent to the backend:** the question and the earlier messages of that chat, and the access code. The backend passes the conversation to the AI provider and returns the answer. It writes no conversation to disk and keeps none in memory after the answer.
+- **Speech:** the microphone uses the browser's own speech recognition. PQ's backend never receives audio, only the text that is sent. Chrome and Edge send the audio to their vendor's speech service to recognise it; that is the browser's doing, not PQ's.
 - **Logged by the backend:** the length of a question, never its text. The exception is a refused question about PQ itself: its text (credentials redacted) and the caller's address are kept and reported like in Teams.
 - **`WEB_UI` is not a login.** It stops other websites from calling your backend from a browser. A script can still call it, which is why `WEB_ACCESS_CODE` and the rate limit exist. The access code is one shared code, not per person: change it to lock everyone out.
 - **Answers can't inject code.** The page escapes all text before formatting it and only makes `http`, `https` and `mailto` links clickable.
