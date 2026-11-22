@@ -122,12 +122,43 @@ _EXAMPLE_MARK = "\n\nExample of rule 2"
 SYSTEM_RESTRICTED = SYSTEM.replace(_EXAMPLE_MARK, BOUNDARY_RULE + _EXAMPLE_MARK, 1)
 
 
-def _system(restricted: bool | None = None) -> str:
+# Added to the rules when the person chose "Interview" in the web UI's settings.
+# If you change it, update docs/RULES.md section 1 too.
+INTERVIEW_RULE = """
+
+Interview mode is on. The person is preparing for a technical interview and wants to hear how to answer this
+question in the interview room. Answer the way a strong candidate says it out loud: in the first person, in a
+natural, confident speaking voice, in short sentences. This replaces the layout of rules 1 and 2 (all other rules
+stay):
+   a. Start with the direct answer in one or two sentences. No warm-up.
+   b. Then the three or four points an interviewer listens for, in a logical order, as plain spoken sentences.
+   c. Then one concrete example told as experience ("In a payments service I worked on, ..."): the situation,
+      what was done and the result, with a number where it is natural. This is the real-time scenario of rule 3.
+      It is a sample: the person replaces it with their own experience.
+   d. Close with one sentence on the trade-off, or on when you would choose something else.
+   Keep the spoken answer to what fits in one to two minutes, about 150 to 250 words. Show code only when the
+   question asks for code, keep it short, and say in a sentence what it does.
+   After the answer add two short lines:
+   **Likely follow-ups:** two or three questions the interviewer may ask next.
+   **Tip:** one thing that makes this answer stand out, or the mistake candidates usually make here.
+   A follow-up such as "go deeper", "shorter" or "explain it to me first" is still answered as asked."""
+
+MODES = ("chat", "interview")
+NO_IMAGES = ("I can't look at images with the AI model I'm running on. Describe what the image shows, or paste "
+             "the text from it, and I'll help.")
+
+
+def _system(restricted: bool | None = None, mode: str = "chat") -> str:
     """System prompt for the current request, with rule 12 when it comes from Teams or the
-    web UI. restricted=None takes that from the current request (boundaries.restricted_access)."""
+    web UI (restricted=None takes that from the current request, boundaries.restricted_access)
+    and with the interview rule when that mode was chosen."""
     if restricted is None:
         restricted = boundaries.is_restricted()
-    return SYSTEM_RESTRICTED if restricted else SYSTEM
+    return (SYSTEM_RESTRICTED if restricted else SYSTEM) + (INTERVIEW_RULE if mode == "interview" else "")
+
+
+def _has_images(content) -> bool:
+    return not isinstance(content, str) and any(_block_type(b) == "image" for b in content)
 
 
 NO_MODEL = "No AI model is configured, so I can't answer questions yet. Please ask an administrator."
@@ -200,12 +231,13 @@ def _history_budget(system: str | None = None) -> int:
     return max(limit - len(system or _system()) - 500, 2000) if limit else 0
 
 
-def _chat(messages, user_text) -> str:
+def _chat(messages, user_text, system: str | None = None) -> str:
     """One model call (chat providers). The question and the answer are added to messages."""
+    system = system or _system()
     messages.append({"role": "user", "content": user_text})
-    messages[:] = trim_history(messages, keep=20, max_chars=_history_budget())
+    messages[:] = trim_history(messages, keep=20, max_chars=_history_budget(system))
     try:
-        resp = llm.create(_system(), messages, [])
+        resp = llm.create(system, messages, [])
     except Exception:
         messages.pop()  # the question was not answered: keep the history as it was
         raise
@@ -222,7 +254,8 @@ def _chat(messages, user_text) -> str:
 def _agent_chat(messages, user_text, system: str | None = None) -> str:
     """One agent run (Cursor): a single message with the recent conversation and the question."""
     earlier = _transcript(messages)
-    prompt = f"Conversation so far:\n{earlier}\n\nNew question: {user_text}" if earlier else user_text
+    question = _content_text(user_text)
+    prompt = f"Conversation so far:\n{earlier}\n\nNew question: {question}" if earlier else question
     messages[:] = trim_history(messages, keep=20)
     with llm.session(system or _system(), [], lambda name, args: NO_TOOLS) as session:
         answer = (session.send(prompt) or "").strip()
@@ -233,15 +266,20 @@ def _agent_chat(messages, user_text, system: str | None = None) -> str:
     return answer
 
 
-def chat(messages, user_text) -> str:
-    """Answer one question. messages is the conversation so far and is updated in place."""
+def chat(messages, user_text, mode: str = "chat") -> str:
+    """Answer one question. messages is the conversation so far and is updated in place.
+    user_text is the question: text, or a list of content blocks when images come with it
+    (Anthropic Messages shape: {"type": "image", ...} and {"type": "text", ...})."""
     if not llm:
         return NO_MODEL
     logger.info("Answering with %s, model %s", llm.title, llm.model)
-    return _agent_chat(messages, user_text) if llm.kind == "agent" else _chat(messages, user_text)
+    system = _system(mode=mode)
+    if llm.kind == "agent":
+        return NO_IMAGES if _has_images(user_text) else _agent_chat(messages, user_text, system)
+    return _chat(messages, user_text, system)
 
 
-def chat_stream(messages, user_text, restricted: bool | None = None):
+def chat_stream(messages, user_text, restricted: bool | None = None, mode: str = "chat"):
     """chat(), piece by piece: yields the answer as text while the model writes it. Joined
     together the pieces are the complete answer. messages is updated like in chat().
 
@@ -251,10 +289,10 @@ def chat_stream(messages, user_text, restricted: bool | None = None):
     if not llm:
         yield NO_MODEL
         return
-    system = _system(restricted)
+    system = _system(restricted, mode)
     logger.info("Answering with %s, model %s (streaming)", llm.title, llm.model)
     if llm.kind == "agent":
-        yield _agent_chat(messages, user_text, system)
+        yield NO_IMAGES if _has_images(user_text) else _agent_chat(messages, user_text, system)
         return
 
     messages.append({"role": "user", "content": user_text})

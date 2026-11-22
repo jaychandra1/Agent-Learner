@@ -43,6 +43,7 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
         </button>
         <h1 class="chat-title" id="chatTitle">New chat</h1>
+        <span class="mode-pill" id="modePill" hidden>Interview mode</span>
         <button class="icon-btn" id="newChatTop" aria-label="New chat">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
         </button>
@@ -51,15 +52,20 @@
       <div class="scroll" id="scroll">
         <section class="welcome" id="welcome">
           <span class="logo big" aria-hidden="true">PQ</span>
-          <h2>What do you want to learn?</h2>
-          <p>Ask about any technology. You get the full picture: what it is, why it exists, how it works, a real-time scenario, an example and the common mistakes.</p>
-          <div class="suggestions" id="suggestions"></div>
+          <h2>Hey, need any help?</h2>
         </section>
         <div class="thread" id="thread" aria-live="polite"></div>
       </div>
 
       <form class="composer" id="composer">
         <div class="composer-box">
+          <div class="attachments" id="attachments" hidden></div>
+          <div class="composer-row">
+          <button class="plus" id="attach" type="button" aria-label="Add images or files" title="Add images or files">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+          <input type="file" id="attachFile" multiple hidden
+                 accept="image/png,image/jpeg,image/webp,image/gif,text/*,.md,.log,.json,.yaml,.yml,.toml,.ini,.env,.xml,.csv,.sql,.sh,.ps1,.bat,.py,.js,.mjs,.ts,.tsx,.jsx,.java,.kt,.go,.rs,.c,.h,.cpp,.cs,.rb,.php,.swift,.scala,.tf,.html,.css,.vue,.dockerfile,.gradle,.properties,.conf">
           <textarea id="input" rows="1" placeholder="Ask a technical question" aria-label="Your question" autocomplete="off"></textarea>
           <button class="mic" id="mic" type="button" aria-label="Speak your question" aria-pressed="false" title="Speak your question" hidden>
             <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
@@ -68,6 +74,7 @@
             <svg class="icon-send" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
             <svg class="icon-stop" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>
           </button>
+          </div>
         </div>
         <p class="hint">Enter to send, Shift+Enter for a new line. PQ can be wrong: check important details.</p>
       </form>
@@ -89,6 +96,14 @@
         <span>Access code</span>
         <input id="accessCode" type="password" autocomplete="off" placeholder="Only if your PQ asks for one">
         <small>Kept on this device and sent with each question.</small>
+      </label>
+      <label class="field">
+        <span>Mode</span>
+        <select id="mode">
+          <option value="chat">Chat</option>
+          <option value="interview">Interview</option>
+        </select>
+        <small>Chat explains the topic in full. Interview answers the way you would say it in an interview: short, spoken, with likely follow-up questions.</small>
       </label>
       <div class="field">
         <span>Your chats</span>

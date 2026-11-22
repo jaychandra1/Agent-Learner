@@ -83,6 +83,19 @@ Tests: `test_agent.py`, `test_provider_cursor.py`.
 
 ---
 
+### Interview mode (web UI)
+
+When a person chooses **Interview** under Settings > Mode in the web UI, one more rule is added to the ones above (`INTERVIEW_RULE` in `agent.py`). It replaces the layout of rules 1 and 2; every other rule stays, the boundaries included.
+
+- The answer is what a strong candidate would say out loud: first person, short spoken sentences, about 150 to 250 words (one to two minutes).
+- Order: the direct answer, the three or four points an interviewer listens for, one concrete example told as experience (a sample the person replaces with their own), one sentence on the trade-off.
+- Code only when the question asks for it.
+- After the answer: **Likely follow-ups** (two or three questions) and a **Tip**.
+
+Teams, the internal API and the command line always use chat mode.
+
+---
+
 ## 2. Answers in Teams
 
 Code: [`teams.py`](../agent/teams.py), [`cards.py`](../agent/cards.py), [`app.py`](../agent/app.py).

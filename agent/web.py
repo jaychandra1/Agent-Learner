@@ -5,6 +5,8 @@ device and sends the conversation along with each question, so nothing is stored
 
     POST /api/chat   {"messages": [{"role": "user" | "assistant", "content": "..."}, ...]}
                      -> {"answer": "..."}            the last message is the new question
+                     optional: "mode": "chat" | "interview" (how to answer), and on a user
+                     message "images": ["data:image/png;base64,...", ...]
     POST /api/stream the same question, answered while the model writes (server-sent events):
                      data: {"delta": "text"} ... then data: {"done": true, "answer": "all of it"}
                      or data: {"error": "..."}
@@ -72,6 +74,10 @@ except ValueError:
 
 MAX_MESSAGES = 40             # of a conversation, the newest are used
 MAX_MESSAGE_CHARS = 20000     # one message (a question with pasted code or logs)
+MAX_IMAGES = 4                # pictures one request may carry, the newest are used
+MAX_IMAGE_CHARS = 3_000_000   # one picture as a data URL (about 2 MB of image)
+IMAGE_ONLY = "Explain what this image shows."   # the question when a picture comes without words
+_DATA_URL = re.compile(r"^data:(image/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/]+=*)$")
 MAX_WAITING = 8               # questions running or waiting, above that people get "busy"
 _slots = threading.BoundedSemaphore(MAX_WAITING)
 _calls: dict[str, deque] = defaultdict(deque)
@@ -82,11 +88,13 @@ router = APIRouter(prefix="/api")
 
 class Message(BaseModel):
     role: Literal["user", "assistant"]
-    content: str
+    content: str = ""
+    images: list[str] = []      # data URLs, only on user messages
 
 
 class ChatIn(BaseModel):
     messages: list[Message]
+    mode: Literal["chat", "interview"] = "chat"
 
 
 def _client(request: Request) -> str:
@@ -124,19 +132,49 @@ def conversation(messages: list[Message]) -> tuple[list[dict], str]:
     turns: list[dict] = []
     for m in messages[-MAX_MESSAGES:]:
         text = m.content.strip()
-        if not text:
+        images = [_image(url) for url in m.images] if m.role == "user" else []
+        if not text and not images:
             continue
         if len(text) > MAX_MESSAGE_CHARS:
             raise HTTPException(status_code=413, detail=f"A message is longer than {MAX_MESSAGE_CHARS} characters.")
         if turns and turns[-1]["role"] == m.role:
-            turns[-1]["content"] += "\n\n" + text
+            turns[-1]["text"] = "\n\n".join(t for t in (turns[-1]["text"], text) if t)
+            turns[-1]["images"] += images
         else:
-            turns.append({"role": m.role, "content": text})
+            turns.append({"role": m.role, "text": text, "images": images})
     while turns and turns[0]["role"] != "user":
         turns.pop(0)
     if not turns or turns[-1]["role"] != "user":
         raise HTTPException(status_code=422, detail="The last message must be a question from the user.")
+
+    # pictures are large: only the newest few go to the model, older ones leave a note
+    room = MAX_IMAGES
+    for turn in reversed(turns):
+        keep = turn["images"][-room:] if room else []
+        dropped = len(turn["images"]) - len(keep)
+        room -= len(keep)
+        text = turn["text"] or (IMAGE_ONLY if turn["images"] else "")
+        if dropped:
+            text += f"\n\n[{dropped} image(s) sent earlier in this chat are no longer attached]"
+        turn["content"] = [*keep, {"type": "text", "text": text}] if keep else text
+    turns = [{"role": t["role"], "content": t["content"]} for t in turns]
     return turns[:-1], turns[-1]["content"]
+
+
+def _image(url: str) -> dict:
+    """A data URL from the device -> an image block (Anthropic Messages shape)."""
+    if len(url) > MAX_IMAGE_CHARS:
+        raise HTTPException(status_code=413, detail="An image is too large. Use a smaller picture.")
+    match = _DATA_URL.match(url)
+    if not match:
+        raise HTTPException(status_code=422, detail="Images must be PNG, JPEG, WebP or GIF.")
+    return {"type": "image", "source": {"type": "base64", "media_type": match.group(1), "data": match.group(2)}}
+
+
+def _words(question) -> str:
+    """The text of a question, for the filter, the log and the administrators' notices."""
+    return question if isinstance(question, str) else "".join(
+        b.get("text", "") for b in question if b.get("type") == "text")
 
 
 @router.get("/health")
@@ -152,11 +190,12 @@ def chat(body: ChatIn, request: Request, x_access_code: str = Header(None)):
     _rate_limit(client)
     history, question = conversation(body.messages)
     sender = {"name": "Web UI user", "aadObjectId": client}
-    logger.info("Web question (%d characters, %d earlier messages)", len(question), len(history))
+    words = _words(question)
+    logger.info("Web question (%d characters, %d earlier messages, mode %s)", len(words), len(history), body.mode)
 
-    reason = boundaries.restricted_question(question)
+    reason = boundaries.restricted_question(words)
     if reason:
-        teams.report_restricted(sender, question, reason, "question filter")
+        teams.report_restricted(sender, words, reason, "question filter")
         return {"answer": boundaries.REFUSAL}
     if not agent.llm:
         raise HTTPException(status_code=503, detail=agent.NO_MODEL)
@@ -164,14 +203,14 @@ def chat(body: ChatIn, request: Request, x_access_code: str = Header(None)):
         raise HTTPException(status_code=429, detail="PQ is busy with other questions. Please try again in a minute.")
     try:
         with boundaries.restricted_access():
-            answer = agent.chat(history, question)
+            answer = agent.chat(history, question, mode=body.mode)
     except Exception as e:  # the raw error can name the AI provider: log only
         logger.exception("Web request failed")
         raise HTTPException(status_code=502, detail=f"Sorry, that failed ({type(e).__name__}). Please try again.")
     finally:
         _slots.release()
     if boundaries.is_refusal(answer):  # the model refused (its boundary rule), show only that
-        teams.report_restricted(sender, question, boundaries.REASON_AI, "AI rule")
+        teams.report_restricted(sender, words, boundaries.REASON_AI, "AI rule")
         answer = boundaries.REFUSAL
     return {"answer": answer}
 
@@ -193,11 +232,13 @@ def stream(body: ChatIn, request: Request, x_access_code: str = Header(None)):
     _rate_limit(client)
     history, question = conversation(body.messages)
     sender = {"name": "Web UI user", "aadObjectId": client}
-    logger.info("Web question, streamed (%d characters, %d earlier messages)", len(question), len(history))
+    words = _words(question)
+    logger.info("Web question, streamed (%d characters, %d earlier messages, mode %s)", len(words), len(history),
+                body.mode)
 
-    reason = boundaries.restricted_question(question)
+    reason = boundaries.restricted_question(words)
     if reason:
-        teams.report_restricted(sender, question, reason, "question filter")
+        teams.report_restricted(sender, words, reason, "question filter")
         return StreamingResponse(iter([_event({"done": True, "answer": boundaries.REFUSAL})]),
                                  media_type="text/event-stream", headers=_STREAM_HEADERS)
     if not agent.llm:
@@ -210,12 +251,12 @@ def stream(body: ChatIn, request: Request, x_access_code: str = Header(None)):
             return
         parts = []
         try:
-            for piece in agent.chat_stream(history, question, restricted=boundaries.ENABLED):
+            for piece in agent.chat_stream(history, question, restricted=boundaries.ENABLED, mode=body.mode):
                 parts.append(piece)
                 yield _event({"delta": piece})
             answer = "".join(parts).strip()
             if boundaries.is_refusal(answer):  # the model refused (its boundary rule), show only that
-                teams.report_restricted(sender, question, boundaries.REASON_AI, "AI rule")
+                teams.report_restricted(sender, words, boundaries.REASON_AI, "AI rule")
                 answer = boundaries.REFUSAL
             yield _event({"done": True, "answer": answer})
         except Exception as e:  # the raw error can name the AI provider: log only

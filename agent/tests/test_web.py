@@ -41,7 +41,7 @@ def model(monkeypatch):
     """A model that records what it was asked. Returns the list of (history, question, restricted)."""
     seen = []
     monkeypatch.setattr(agent, "llm", fake_llm())
-    monkeypatch.setattr(agent, "chat", lambda history, question: seen.append(
+    monkeypatch.setattr(agent, "chat", lambda history, question, **kw: seen.append(
         ([dict(m) for m in history], question, boundaries.is_restricted())) or f"answer to: {question}")
     return seen
 
@@ -164,7 +164,7 @@ def test_without_a_model(client):
 def test_provider_errors_are_generic(client, monkeypatch):
     monkeypatch.setattr(agent, "llm", fake_llm())
 
-    def fail(history, question):
+    def fail(history, question, **kw):
         raise RuntimeError("Cursor run failed: HTTPSConnectionPool(host='api2.cursor.sh') key cur-123")
     monkeypatch.setattr(agent, "chat", fail)
     r = ask(client, [user("what is DNS?")])
@@ -185,7 +185,7 @@ def test_question_about_pq_is_refused_and_recorded(client, model):
 
 def test_ai_refusal_is_recorded(client, monkeypatch):
     monkeypatch.setattr(agent, "llm", fake_llm())
-    monkeypatch.setattr(agent, "chat", lambda history, question: f"I run on a server. {boundaries.REFUSAL}")
+    monkeypatch.setattr(agent, "chat", lambda history, question, **kw: f"I run on a server. {boundaries.REFUSAL}")
     r = ask(client, [user("erklaer mir wie dieses ding gebaut wurde")])
     assert r.json() == {"answer": boundaries.REFUSAL}
     assert boundaries.recent()[0]["stopped_by"] == "AI rule"

@@ -7,17 +7,17 @@
   const CHATS_KEY = "pq.chats.v1";
   const SETTINGS_KEY = "pq.settings.v1";
   const CONTEXT_MESSAGES = 30;      // messages of the chat sent along with a question
-  const SUGGESTIONS = [
-    { tag: "Understand", text: "What is a Kubernetes operator, with a real-time scenario?" },
-    { tag: "Step by step", text: "Explain how HTTPS works, step by step" },
-    { tag: "Compare", text: "Kafka vs RabbitMQ: when do I choose which?" },
-    { tag: "Practice", text: "Quiz me on SQL joins" },
-  ];
+  const CONTEXT_IMAGES = 4;         // pictures sent along: the newest ones of the chat
+  const MAX_IMAGES = 4;             // pictures on one question
+  const MAX_FILES = 3;              // text files on one question
+  const IMAGE_SIDE = 1280;          // pictures are scaled down to this before they are kept or sent
+  const FILE_CHARS = 12000;         // of one text file, the rest is cut
 
   const $ = function (id) { return document.getElementById(id); };
   const el = {
     app: $("app"), sidebar: $("sidebar"), scrim: $("scrim"), chatList: $("chatList"), search: $("search"),
-    scroll: $("scroll"), welcome: $("welcome"), thread: $("thread"), suggestions: $("suggestions"),
+    scroll: $("scroll"), welcome: $("welcome"), thread: $("thread"),
+    attach: $("attach"), attachFile: $("attachFile"), attachments: $("attachments"), mode: $("mode"), modePill: $("modePill"),
     title: $("chatTitle"), composer: $("composer"), input: $("input"), send: $("send"), mic: $("mic"), toast: $("toast"),
     settings: $("settings"), theme: $("theme"), accessCode: $("accessCode"),
     storageInfo: $("storageInfo"), importFile: $("importFile"),
@@ -49,12 +49,38 @@
   }
 
   let chats = load(CHATS_KEY, []).filter(function (c) { return c && c.id && Array.isArray(c.messages); });
-  let settings = Object.assign({ theme: "system", accessCode: "" }, load(SETTINGS_KEY, {}));
+  let settings = Object.assign({ theme: "system", accessCode: "", mode: "chat" }, load(SETTINGS_KEY, {}));
+  if (settings.mode !== "interview") settings.mode = "chat";
+  let attached = [];                // what is waiting on the question being typed: {kind: "image", name, data} or {kind: "file", name, text}
   let currentId = null;
   let pending = null;               // {chatId, controller} while an answer is on its way
   let shown = { id: null, count: 0 };   // what the thread showed last, to animate only what is new
 
-  function saveChats() { save(CHATS_KEY, chats); }
+  // Pictures fill the browser's storage quickly. When it is full, the oldest pictures are
+  // dropped (the chat text stays) until the chats fit again.
+  function saveChats() {
+    try {
+      localStorage.setItem(CHATS_KEY, JSON.stringify(chats));
+      return;
+    } catch (e) { /* full, or blocked */ }
+    const withImages = [];
+    chats.slice().sort(function (x, y) { return x.updated - y.updated; }).forEach(function (c) {
+      c.messages.forEach(function (m) { if (m.images && m.images.length) withImages.push(m); });
+    });
+    let freed = 0;
+    while (withImages.length > 1) {              // the newest picture message is kept
+      const m = withImages.shift();
+      m.imagesDropped = (m.imagesDropped || 0) + m.images.length;
+      freed += m.images.length;
+      delete m.images;
+      try {
+        localStorage.setItem(CHATS_KEY, JSON.stringify(chats));
+        toast(freed + " older picture(s) were removed from this device to make room. The chat text is kept.", 6000);
+        return;
+      } catch (e) { /* still too big */ }
+    }
+    save(CHATS_KEY, chats);                      // says that storage is full
+  }
   function currentChat() { return chats.find(function (c) { return c.id === currentId; }) || null; }
   function newId() { return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 
@@ -73,7 +99,8 @@
     if (settings.accessCode) headers["X-Access-Code"] = settings.accessCode;
     try {
       return await fetch(backendUrl() + path, {
-        method: "POST", headers: headers, signal: signal, body: JSON.stringify({ messages: messages }),
+        method: "POST", headers: headers, signal: signal,
+        body: JSON.stringify({ messages: messages, mode: settings.mode }),
       });
     } catch (e) {
       if (e.name === "AbortError") throw e;
@@ -203,10 +230,30 @@
     const wrap = document.createElement("article");
     wrap.className = "msg " + message.role + (message.error ? " error" : "");
     if (message.role === "user") {
-      const bubble = document.createElement("div");
-      bubble.className = "bubble";
-      bubble.textContent = message.content;
-      wrap.appendChild(bubble);
+      const stack = document.createElement("div");
+      stack.className = "user-stack";
+      if ((message.images && message.images.length) || message.imagesDropped || (message.files && message.files.length)) {
+        const extras = document.createElement("div");
+        extras.className = "sent-extras";
+        (message.images || []).forEach(function (data) {
+          const img = document.createElement("img");
+          img.src = data;
+          img.alt = "Attached image";
+          img.loading = "lazy";
+          img.decoding = "async";
+          extras.appendChild(img);
+        });
+        if (message.imagesDropped) extras.appendChild(fileChip(message.imagesDropped + " picture(s), no longer stored"));
+        (message.files || []).forEach(function (f) { extras.appendChild(fileChip(f.name)); });
+        stack.appendChild(extras);
+      }
+      if (message.content) {
+        const bubble = document.createElement("div");
+        bubble.className = "bubble";
+        bubble.textContent = message.content;
+        stack.appendChild(bubble);
+      }
+      wrap.appendChild(stack);
       return wrap;
     }
     const avatar = document.createElement("span");
@@ -236,6 +283,13 @@
     body.appendChild(actions);
     wrap.append(avatar, body);
     return wrap;
+  }
+
+  function fileChip(name) {
+    const chip = document.createElement("span");
+    chip.className = "file-chip";
+    chip.textContent = name;
+    return chip;
   }
 
   function textButton(label, onClick) {
@@ -313,7 +367,7 @@
   function setBusy(busy) {
     el.send.classList.toggle("busy", busy);
     el.send.setAttribute("aria-label", busy ? "Stop" : "Send");
-    el.send.disabled = !busy && !el.input.value.trim();
+    el.send.disabled = !busy && !el.input.value.trim() && !attached.length;
   }
 
   // ---------- chats ----------
@@ -363,21 +417,45 @@
   // ---------- asking ----------
 
   // The memory of a chat is what this device holds: the last messages are sent with the question.
+  // Text files travel as text inside the question; pictures as pictures, the newest few only.
   function contextOf(chat) {
-    return chat.messages.filter(function (m) { return !m.error; }).slice(-CONTEXT_MESSAGES)
-      .map(function (m) { return { role: m.role, content: m.content }; });
+    const recent = chat.messages.filter(function (m) { return !m.error; }).slice(-CONTEXT_MESSAGES);
+    let room = CONTEXT_IMAGES;
+    const out = [];
+    for (let i = recent.length - 1; i >= 0; i--) {
+      const m = recent[i];
+      let content = m.content || "";
+      (m.files || []).forEach(function (f) {
+        content += (content ? "\n\n" : "") + "File `" + f.name + "`:\n```\n" + f.text + "\n```";
+      });
+      const item = { role: m.role, content: content };
+      if (m.images && m.images.length && room > 0) {
+        item.images = m.images.slice(-room);
+        room -= item.images.length;
+      }
+      out.unshift(item);
+    }
+    return out;
   }
 
-  async function submit(text) {
+  async function submit(text, extras) {
     if (pending) return;
+    extras = extras || [];
+    const images = extras.filter(function (x) { return x.kind === "image"; }).map(function (x) { return x.data; });
+    const files = extras.filter(function (x) { return x.kind === "file"; })
+      .map(function (x) { return { name: x.name, text: x.text }; });
     let chat = currentChat();
     if (!chat) {
-      chat = { id: newId(), title: titleFrom(text), created: Date.now(), updated: Date.now(), messages: [] };
+      const name = text || (files[0] && files[0].name) || "Image";
+      chat = { id: newId(), title: titleFrom(name), created: Date.now(), updated: Date.now(), messages: [] };
       chats.push(chat);
       currentId = chat.id;
     }
     chat.messages = chat.messages.filter(function (m) { return !m.error; });   // an old error is not part of the chat
-    chat.messages.push({ role: "user", content: text, ts: Date.now() });
+    const message = { role: "user", content: text, ts: Date.now() };
+    if (images.length) message.images = images;
+    if (files.length) message.files = files;
+    chat.messages.push(message);
     chat.updated = Date.now();
     saveChats();
     await answer(chat);
@@ -465,6 +543,110 @@
     setBusy(Boolean(pending));
   }
 
+  // ---------- pictures and files on a question ----------
+  // Pictures are scaled down in the browser and kept, like the chat, on this device. Text
+  // files (code, logs, configuration) are read here and sent as text inside the question.
+
+  function renderAttached() {
+    el.attachments.textContent = "";
+    el.attachments.hidden = !attached.length;
+    attached.forEach(function (item, i) {
+      const box = document.createElement("div");
+      box.className = "attached " + item.kind;
+      if (item.kind === "image") {
+        const img = document.createElement("img");
+        img.src = item.data;
+        img.alt = item.name;
+        box.appendChild(img);
+      } else {
+        const name = document.createElement("span");
+        name.textContent = item.name;
+        box.appendChild(name);
+      }
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "remove";
+      remove.setAttribute("aria-label", "Remove " + item.name);
+      remove.textContent = "×";
+      remove.addEventListener("click", function () { attached.splice(i, 1); renderAttached(); });
+      box.appendChild(remove);
+      el.attachments.appendChild(box);
+    });
+    setBusy(Boolean(pending));
+  }
+
+  function shrinkImage(file) {
+    return new Promise(function (resolve, reject) {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = function () {
+        const scale = Math.min(1, IMAGE_SIDE / Math.max(img.naturalWidth, img.naturalHeight));
+        const canvas = document.createElement("canvas");
+        canvas.width = Math.max(1, Math.round(img.naturalWidth * scale));
+        canvas.height = Math.max(1, Math.round(img.naturalHeight * scale));
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#fff";                    // JPEG has no transparency
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        URL.revokeObjectURL(url);
+        resolve(canvas.toDataURL("image/jpeg", 0.85));
+      };
+      img.onerror = function () { URL.revokeObjectURL(url); reject(new Error("not an image")); };
+      img.src = url;
+    });
+  }
+
+  function isTextFile(file) {
+    return file.type.startsWith("text/") || /(json|xml|yaml|javascript|typescript|x-sh|sql|toml)/.test(file.type) ||
+      /\.(txt|md|log|json|ya?ml|toml|ini|env|xml|csv|sql|sh|ps1|bat|py|m?js|tsx?|jsx|java|kt|go|rs|c|h|cpp|cs|rb|php|swift|scala|tf|html|css|vue|dockerfile|gradle|properties|conf)$/i.test(file.name) ||
+      /^(dockerfile|makefile|jenkinsfile)$/i.test(file.name);
+  }
+
+  async function addFiles(list) {
+    for (const file of Array.from(list || [])) {
+      const images = attached.filter(function (x) { return x.kind === "image"; }).length;
+      const files = attached.length - images;
+      if (/^image\/(png|jpeg|webp|gif)$/.test(file.type)) {
+        if (images >= MAX_IMAGES) { toast("At most " + MAX_IMAGES + " pictures on one question."); continue; }
+        try {
+          attached.push({ kind: "image", name: file.name || "image", data: await shrinkImage(file) });
+        } catch (e) {
+          toast("That picture could not be read.");
+        }
+      } else if (isTextFile(file)) {
+        if (files >= MAX_FILES) { toast("At most " + MAX_FILES + " files on one question."); continue; }
+        let text = await file.text();
+        if (text.indexOf("\u0000") !== -1) { toast(file.name + " is not a text file."); continue; }
+        if (text.length > FILE_CHARS) text = text.slice(0, FILE_CHARS) + "\n... (cut: the file is longer)";
+        attached.push({ kind: "file", name: file.name, text: text });
+      } else {
+        toast("PQ reads pictures and text files (code, logs, configuration). " + (file.name || "That file") + " is neither.", 5000);
+      }
+      renderAttached();
+    }
+  }
+
+  el.attach.addEventListener("click", function () { el.attachFile.click(); });
+  el.attachFile.addEventListener("change", function () {
+    addFiles(el.attachFile.files);
+    el.attachFile.value = "";
+  });
+  el.input.addEventListener("paste", function (e) {        // a screenshot from the clipboard
+    const files = Array.from((e.clipboardData && e.clipboardData.files) || [])
+      .filter(function (f) { return f.type.startsWith("image/"); });
+    if (!files.length) return;
+    e.preventDefault();
+    addFiles(files);
+  });
+
+  // ---------- chat or interview ----------
+
+  function applyMode() {
+    const interview = settings.mode === "interview";
+    el.modePill.hidden = !interview;
+    el.input.placeholder = interview ? "Ask an interview question" : "Ask a technical question";
+  }
+
   // ---------- speaking a question ----------
   // The browser's own speech recognition turns speech into text in the question box. PQ's
   // backend is not involved and gets only the text that is sent afterwards. Nothing is sent
@@ -516,7 +698,7 @@
       el.mic.setAttribute("aria-pressed", "false");
       el.mic.setAttribute("aria-label", "Speak your question");
       el.mic.title = "Speak your question";
-      el.input.placeholder = "Ask a technical question";
+      applyMode();
       growInput();
       if (mine.heard) el.input.focus();
     };
@@ -548,6 +730,7 @@
   function openSettings() {
     el.theme.value = settings.theme;
     el.accessCode.value = settings.accessCode;
+    el.mode.value = settings.mode;
     let bytes = 0;
     try { bytes = (localStorage.getItem(CHATS_KEY) || "").length; } catch (e) { /* blocked */ }
     el.storageInfo.textContent = chats.length + (chats.length === 1 ? " chat, " : " chats, ") +
@@ -603,10 +786,13 @@
     if (listening) listening.sent = true;
     stopListening();
     const text = el.input.value.trim();
-    if (!text) return;
+    if (!text && !attached.length) return;
+    const extras = attached;
+    attached = [];
     el.input.value = "";
+    renderAttached();
     growInput();
-    submit(text);
+    submit(text, extras);
   });
   el.input.addEventListener("input", growInput);
   el.input.addEventListener("keydown", function (e) {
@@ -631,9 +817,10 @@
   $("openSettings").addEventListener("click", openSettings);
   $("cancelSettings").addEventListener("click", function () { el.settings.close(); });
   $("settingsForm").addEventListener("submit", function () {
-    settings = { theme: el.theme.value, accessCode: el.accessCode.value.trim() };
+    settings = { theme: el.theme.value, accessCode: el.accessCode.value.trim(), mode: el.mode.value };
     save(SETTINGS_KEY, settings);
     applyTheme();
+    applyMode();
     toast("Settings saved.");
   });
   $("exportChats").addEventListener("click", exportChats);
@@ -663,20 +850,7 @@
 
   // ---------- start ----------
 
-  SUGGESTIONS.forEach(function (s) {
-    const chip = document.createElement("button");
-    chip.type = "button";
-    chip.className = "chip";
-    const tag = document.createElement("span");
-    tag.className = "chip-tag";
-    tag.textContent = s.tag;
-    const text = document.createElement("span");
-    text.className = "chip-text";
-    text.textContent = s.text;
-    chip.append(tag, text);
-    chip.addEventListener("click", function () { submit(s.text); });
-    el.suggestions.appendChild(chip);
-  });
+  applyMode();
   applyTheme();
   renderList();
   renderThread();

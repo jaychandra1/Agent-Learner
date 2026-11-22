@@ -60,14 +60,20 @@ def to_openai_messages(system: str, messages: list[dict]) -> list[dict]:
         elif isinstance(content, str):
             out.append({"role": "user", "content": content})
         else:
-            texts = []
+            texts, images = [], []
             for b in content:
                 if _get(b, "type") == "tool_result":
                     out.append({"role": "tool", "tool_call_id": _get(b, "tool_use_id"),
                                 "name": tool_names.get(_get(b, "tool_use_id"), ""), "content": str(_get(b, "content"))})
                 elif _get(b, "type") == "text":
                     texts.append(_get(b, "text"))
-            if texts:  # has to come after the tool results, those must directly follow the tool_calls
+                elif _get(b, "type") == "image":  # {"source": {"type": "base64", "media_type", "data"}}
+                    source = _get(b, "source") or {}
+                    images.append({"type": "image_url", "image_url": {
+                        "url": f"data:{_get(source, 'media_type')};base64,{_get(source, 'data')}"}})
+            if images:  # a question with pictures: the text and the pictures as parts of one message
+                out.append({"role": "user", "content": [{"type": "text", "text": "\n".join(texts)}, *images]})
+            elif texts:  # has to come after the tool results, those must directly follow the tool_calls
                 out.append({"role": "user", "content": "\n".join(texts)})
     return out
 

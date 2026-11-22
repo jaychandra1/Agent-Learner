@@ -107,7 +107,8 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 .thread { padding-top: 16px; padding-bottom: 28px; }
 
 .welcome { display: flex; flex-direction: column; align-items: center; text-align: center; padding-top: 11vh; padding-bottom: 20px; animation: rise .5s var(--ease) both; }
-.welcome h2 { margin: 26px 0 10px; font-size: clamp(28px, 4.2vw, 40px); line-height: 1.12; font-weight: 750; letter-spacing: -.035em; background: var(--grad); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent; }
+.welcome { padding-top: 22vh; }
+.welcome h2 { margin: 22px 0 0; font-size: clamp(24px, 3.4vw, 30px); line-height: 1.2; font-weight: 650; letter-spacing: -.02em; color: var(--text); }
 .welcome p { margin: 0; max-width: 560px; color: var(--muted); font-size: 16.5px; }
 .suggestions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; width: 100%; margin-top: 36px; }
 .chip { display: flex; flex-direction: column; gap: 5px; padding: 15px 17px; border: 1px solid var(--line); border-radius: 16px; background: var(--elev); text-align: left; box-shadow: var(--shadow-sm); transition: transform .18s var(--ease), border-color .18s, box-shadow .18s; }
@@ -189,6 +190,30 @@ textarea::placeholder { color: var(--muted); }
 .send.busy .icon-stop { display: block; fill: currentColor; stroke: none; }
 .hint { margin: 9px 0 0; text-align: center; color: var(--muted); font-size: 12.5px; }
 
+/* the box holds a row of waiting pictures and files above the row with the buttons */
+.composer-box { flex-direction: column; align-items: stretch; gap: 8px; padding: 9px; }
+.composer-row { display: flex; align-items: flex-end; gap: 6px; }
+.composer-row textarea { padding-left: 4px; }
+.plus { display: inline-grid; place-items: center; width: 40px; height: 40px; flex: none; border: 0; border-radius: 50%; background: none; color: var(--muted); transition: background .12s, color .12s, transform .15s var(--ease); }
+.plus:hover { background: var(--panel); color: var(--text); }
+.plus:active { transform: scale(.94); }
+.attachments { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px 6px 0; }
+.attached { position: relative; display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); overflow: hidden; animation: rise .2s var(--ease) both; }
+.attached img { display: block; width: 64px; height: 64px; object-fit: cover; }
+.attached.file { max-width: 220px; padding: 8px 30px 8px 12px; font-size: 13.5px; }
+.attached.file span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.attached .remove { position: absolute; top: 3px; right: 3px; display: grid; place-items: center; width: 20px; height: 20px; padding: 0; border: 0; border-radius: 50%; background: rgba(10, 11, 16, .72); color: #fff; font-size: 14px; line-height: 1; }
+.attached.file .remove { top: 50%; transform: translateY(-50%); background: var(--line-strong); color: var(--text); }
+
+/* a question that went out with pictures or files */
+.user-stack { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; max-width: 82%; }
+.user-stack .bubble { max-width: 100%; }
+.sent-extras { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: flex-end; gap: 6px; }
+.sent-extras img { display: block; max-width: 240px; max-height: 200px; border: 1px solid var(--line); border-radius: 14px; object-fit: cover; }
+.file-chip { display: inline-block; max-width: 240px; padding: 6px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); font-size: 13.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.mode-pill { flex: none; padding: 3px 11px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); font-size: 12.5px; font-weight: 650; }
+
 /* ---------- dialog, toast ---------- */
 .dialog { width: min(480px, calc(100vw - 32px)); padding: 0; border: 1px solid var(--line); border-radius: 22px; background: var(--elev); color: var(--text); box-shadow: var(--shadow-lg); }
 .dialog[open] { animation: pop .2s var(--ease) both; }
@@ -230,6 +255,8 @@ textarea::placeholder { color: var(--muted); }
   .suggestions { grid-template-columns: minmax(0, 1fr); gap: 10px; margin-top: 28px; }
   .msg { gap: 11px; }
   .bubble { max-width: 90%; }
+  .user-stack { max-width: 90%; }
+  .welcome { padding-top: 16vh; }
   .hint { display: none; }
 }
 @media (prefers-reduced-motion: reduce) {
