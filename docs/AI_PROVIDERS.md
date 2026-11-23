@@ -115,7 +115,7 @@ PQ supports two provider shapes ([`providers/base.py`](../agent/providers/base.p
 
 ### Claude ([`claude.py`](../agent/providers/claude.py))
 - Anthropic Messages API. The `tools` parameter is not sent, because there are none.
-- `LLM_EFFORT` (default `high`; also `low`, `medium`, `xhigh`, `max`; `none` = don't send) controls how much the model thinks.
+- `LLM_EFFORT` (default `medium`; also `low`, `high`, `xhigh`, `max`; `none` = don't send) controls how much the model thinks. Thinking happens before the first word appears, so a lower value answers sooner and a higher one reasons more.
 - `LLM_FALLBACKS: "default"` re-runs a refused request on Anthropic's fallback model within the same call; `"off"` disables it.
 - The full reply, thinking blocks included, goes into the conversation history as it is. When PQ trims a history, it drops the thinking blocks from what is kept.
 
@@ -153,7 +153,7 @@ Defaults from [`providers/catalog.py`](../agent/providers/catalog.py). Every val
 | `LLM_MAX_OUTPUT_TOKENS`: the longest reply | 2,500 | 16,000 | – | 4,000 |
 | `LLM_MAX_REQUEST_CHARS`: one request (the rules + the conversation) | 14,000 | 200,000 | – | 60,000 |
 | `LLM_TIMEOUT_SECONDS` | 120 per call | 300 per call | 600 per run | 120 per call |
-| `LLM_EFFORT` | `medium` (gpt-oss models) | `high` | – | not sent |
+| `LLM_EFFORT` | `low` (gpt-oss models) | `medium` | – | not sent |
 | `LLM_MAX_STEPS` (no effect) | 8 | 14 | 2 | 12 |
 | `LLM_TOOL_OUTPUT_CHARS` (no effect) | 2,500 | 15,000 | 15,000 | 8,000 |
 

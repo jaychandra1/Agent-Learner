@@ -45,10 +45,12 @@ class Spec:
     limits: Limits = field(default=STANDARD)
 
 
+# Default efforts are on the low side on purpose: PQ explains, it does not investigate, and
+# the time a model spends thinking is time before the first word appears. LLM_EFFORT raises it.
 CATALOG = {s.name: s for s in [
     Spec("groq", "openai", "Groq", "GROQ_API_KEY", base_url="https://api.groq.com/openai/v1",
-         model="openai/gpt-oss-120b", effort="medium", reasoning_models=("openai/gpt-oss",), limits=FREE_TIER),
-    Spec("anthropic", "claude", "Anthropic Claude", "ANTHROPIC_API_KEY", model="claude-opus-5-5", effort="high",
+         model="openai/gpt-oss-120b", effort="low", reasoning_models=("openai/gpt-oss",), limits=FREE_TIER),
+    Spec("anthropic", "claude", "Anthropic Claude", "ANTHROPIC_API_KEY", model="claude-opus-5-5", effort="medium",
          limits=LARGE),
     Spec("cursor", "cursor", "Cursor", "CURSOR_API_KEY", model="composer-2.5", limits=AGENT),
     Spec("gemini", "openai", "Google Gemini", "GEMINI_API_KEY",

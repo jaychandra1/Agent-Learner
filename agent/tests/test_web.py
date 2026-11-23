@@ -243,3 +243,10 @@ def test_microphone_turns_speech_into_text_in_the_browser_only():
     assert 'id="mic"' in page and "hidden" in page.split('id="mic"')[1].split(">")[0]  # shown only where it works
     assert "SpeechRecognition" in app_js and "webkitSpeechRecognition" in app_js
     assert "getUserMedia" not in app_js and "MediaRecorder" not in app_js  # no audio is recorded or uploaded by PQ
+
+
+def test_page_wakes_the_backend_when_it_opens():
+    app_js = (WEBUI_DIR / "app.js").read_text(encoding="utf-8")
+    assert '"/api/health"' in app_js and "visibilitychange" in app_js
+    proxy = (WEBUI_DIR / "api" / "health.js").read_text(encoding="utf-8")
+    assert "process.env.BACKEND_URL" in proxy and "/api/health" in proxy

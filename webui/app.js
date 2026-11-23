@@ -851,6 +851,16 @@
   // ---------- start ----------
 
   applyMode();
+
+  // A backend on a plan that sleeps when idle needs up to a minute to start. Wake it now,
+  // while the person is still typing, and keep it awake while the page is open and visible.
+  function wake() {
+    if (document.visibilityState !== "visible") return;
+    fetch(backendUrl() + "/api/health", { cache: "no-store" }).catch(function () { /* the question will say so */ });
+  }
+  wake();
+  setInterval(wake, 9 * 60 * 1000);
+  document.addEventListener("visibilitychange", wake);
   applyTheme();
   renderList();
   renderThread();

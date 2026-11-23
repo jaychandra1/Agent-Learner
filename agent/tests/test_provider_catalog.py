@@ -106,11 +106,12 @@ def test_bad_number_is_reported():
 def test_reasoning_effort_rules():
     def effort(**values):
         return load_provider(env("groq", GROQ_API_KEY="gsk", **values))[0].reasoning_effort
-    assert effort() == "medium"                                            # gpt-oss: Groq's default
+    assert effort() == "low"                                               # gpt-oss: quick first words by default
     assert effort(LLM_MODEL="llama-3.3-70b-versatile") == ""              # not a reasoning model
     assert effort(LLM_MODEL="llama-3.3-70b-versatile", LLM_EFFORT="high") == "high"  # asked for explicitly
     assert effort(LLM_EFFORT="none") == ""
-    assert resolve(env("anthropic", ANTHROPIC_API_KEY="k"))["effort"] == "high"
+    assert resolve(env("anthropic", ANTHROPIC_API_KEY="k"))["effort"] == "medium"
+    assert resolve(env("anthropic", ANTHROPIC_API_KEY="k", LLM_EFFORT="high"))["effort"] == "high"
     assert resolve(env("anthropic", ANTHROPIC_API_KEY="k", LLM_EFFORT="max"))["effort"] == "max"
 
 
