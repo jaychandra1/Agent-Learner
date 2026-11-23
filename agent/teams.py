@@ -209,10 +209,11 @@ def answer_in_session(conv_id: str, question: str) -> str:
 
 def _submit(fn, *args):
     """Queue an answer. Returns None when too much is waiting already."""
-    if not _slots.acquire(blocking=False):
+    slots = _slots  # the one we take from is the one we give back to, whatever happens meanwhile
+    if not slots.acquire(blocking=False):
         return None
     future = _pool.submit(fn, *args)
-    future.add_done_callback(lambda _f: _slots.release())
+    future.add_done_callback(lambda _f: slots.release())
     return future
 
 

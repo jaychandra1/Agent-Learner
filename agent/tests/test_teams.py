@@ -181,12 +181,17 @@ def test_too_many_waiting_questions_get_a_busy_reply(monkeypatch):
     monkeypatch.setattr(agent, "llm", fake_llm())
     monkeypatch.setattr(teams, "_slots", threading.BoundedSemaphore(1))
     release = threading.Event()
+    posted = []
     monkeypatch.setattr(teams, "answer_in_session", lambda conv, q: release.wait(5) and "done")
-    monkeypatch.setattr(teams, "post_card", lambda *a: [{"ok": True}])
+    monkeypatch.setattr(teams, "post_card", lambda *a: posted.append(a) or [{"ok": True}])
     body = {"type": "message", "text": "<at>PQ</at> why?", "conversation": {"id": "c"}}
     assert teams.handle_outgoing({**body, "id": "busy-1"})["text"].startswith("Working on it")
     assert "busy" in teams.handle_outgoing({**body, "id": "busy-2"})["text"]
     release.set()
+    # let the first question finish inside this test: otherwise its answer is posted while
+    # the next test runs, through whatever that test put in place of the network
+    assert wait_for(lambda: posted)
+    assert wait_for(lambda: teams._slots.acquire(blocking=False))  # and the slot came back
 
 
 # --- Posting to Workflows webhooks ---

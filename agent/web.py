@@ -246,7 +246,8 @@ def stream(body: ChatIn, request: Request, x_access_code: str = Header(None)):
 
     def events():
         # the slot is taken in here, so it is always given back, also when the person leaves
-        if not _slots.acquire(blocking=False):
+        slots = _slots
+        if not slots.acquire(blocking=False):
             yield _event({"error": "PQ is busy with other questions. Please try again in a minute."})
             return
         parts = []
@@ -263,6 +264,6 @@ def stream(body: ChatIn, request: Request, x_access_code: str = Header(None)):
             logger.exception("Web request failed")
             yield _event({"error": f"Sorry, that failed ({type(e).__name__}). Please try again."})
         finally:
-            _slots.release()
+            slots.release()
 
     return StreamingResponse(events(), media_type="text/event-stream", headers=_STREAM_HEADERS)
