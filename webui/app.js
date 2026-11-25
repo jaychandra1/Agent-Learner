@@ -12,12 +12,15 @@
   const MAX_FILES = 3;              // text files on one question
   const IMAGE_SIDE = 1280;          // pictures are scaled down to this before they are kept or sent
   const FILE_CHARS = 12000;         // of one text file, the rest is cut
+  const DOCUMENT_CHARS = 20000;     // of a PDF or Word file (a resume)
+  const MAX_DOCUMENT_BYTES = 3 * 1024 * 1024;
 
   const $ = function (id) { return document.getElementById(id); };
   const el = {
     app: $("app"), sidebar: $("sidebar"), scrim: $("scrim"), chatList: $("chatList"), search: $("search"),
     scroll: $("scroll"), welcome: $("welcome"), thread: $("thread"),
     attach: $("attach"), attachFile: $("attachFile"), attachments: $("attachments"), mode: $("mode"), modePill: $("modePill"),
+    autoListen: $("autoListen"), startMock: $("startMock"), mockIntro: $("mockIntro"), welcomeTitle: $("welcomeTitle"),
     title: $("chatTitle"), composer: $("composer"), input: $("input"), send: $("send"), mic: $("mic"), toast: $("toast"),
     settings: $("settings"), theme: $("theme"), accessCode: $("accessCode"),
     storageInfo: $("storageInfo"), importFile: $("importFile"),
@@ -49,8 +52,11 @@
   }
 
   let chats = load(CHATS_KEY, []).filter(function (c) { return c && c.id && Array.isArray(c.messages); });
-  let settings = Object.assign({ theme: "system", accessCode: "", mode: "chat" }, load(SETTINGS_KEY, {}));
-  if (settings.mode !== "interview") settings.mode = "chat";
+  const MODES = { chat: "", interview: "Interview mode", mock: "Mock interview" };
+  let settings = Object.assign({ theme: "system", accessCode: "", mode: "chat", autoListen: true }, load(SETTINGS_KEY, {}));
+  if (!(settings.mode in MODES)) settings.mode = "chat";
+  let requestMode = "chat";         // the mode of the chat whose question is on its way
+  let reading = 0;                  // PDF or Word files still being read
   let attached = [];                // what is waiting on the question being typed: {kind: "image", name, data} or {kind: "file", name, text}
   let currentId = null;
   let pending = null;               // {chatId, controller} while an answer is on its way
@@ -100,7 +106,7 @@
     try {
       return await fetch(backendUrl() + path, {
         method: "POST", headers: headers, signal: signal,
-        body: JSON.stringify({ messages: messages, mode: settings.mode }),
+        body: JSON.stringify({ messages: messages, mode: requestMode }),
       });
     } catch (e) {
       if (e.name === "AbortError") throw e;
@@ -329,6 +335,7 @@
       if (count - shown.count > 1) el.thread.children[count - 2].classList.add("enter");
     }
     shown = { id: id, count: count };
+    applyMode();
     setBusy(Boolean(pending));
     if (scrollToEnd !== false) el.scroll.scrollTop = el.scroll.scrollHeight;
   }
@@ -367,7 +374,7 @@
   function setBusy(busy) {
     el.send.classList.toggle("busy", busy);
     el.send.setAttribute("aria-label", busy ? "Stop" : "Send");
-    el.send.disabled = !busy && !el.input.value.trim() && !attached.length;
+    el.send.disabled = !busy && ((!el.input.value.trim() && !attached.length) || reading > 0);
   }
 
   // ---------- chats ----------
@@ -446,8 +453,9 @@
       .map(function (x) { return { name: x.name, text: x.text }; });
     let chat = currentChat();
     if (!chat) {
-      const name = text || (files[0] && files[0].name) || "Image";
-      chat = { id: newId(), title: titleFrom(name), created: Date.now(), updated: Date.now(), messages: [] };
+      const name = settings.mode === "mock" ? "Mock interview" : text || (files[0] && files[0].name) || "Image";
+      chat = { id: newId(), title: titleFrom(name), created: Date.now(), updated: Date.now(), messages: [],
+               mode: settings.mode };
       chats.push(chat);
       currentId = chat.id;
     }
@@ -466,12 +474,15 @@
     const mine = pending = { chatId: chat.id, controller: controller, text: "", live: null, frame: 0 };
     renderList();
     renderThread();
+    requestMode = modeOf(chat);
+    let answered = false;
     try {
       const text = await ask(contextOf(chat), controller.signal, function (soFar) {
         mine.text = soFar;
         paintLive();
       });
       chat.messages.push({ role: "assistant", content: text, ts: Date.now() });
+      answered = true;
     } catch (e) {
       if (mine.text.trim()) {
         // Stop was pressed, or the connection broke, after part of the answer arrived: keep that part
@@ -487,6 +498,10 @@
     saveChats();
     renderList();
     if (chat.id === currentId) renderThread();
+    // a mock interview: the interviewer asked something, so listen for the spoken answer
+    if (answered && modeOf(chat) === "mock" && settings.autoListen && chat.id === currentId && !el.input.value.trim()) {
+      setTimeout(function () { if (!pending && !listening && Recognition && !micRefused) startListening(); }, 400);
+    }
   }
 
   function retry(index) {
@@ -602,6 +617,39 @@
       /^(dockerfile|makefile|jenkinsfile)$/i.test(file.name);
   }
 
+  function isDocument(file) {
+    return file.type === "application/pdf" || /\.(pdf|docx)$/i.test(file.name) ||
+      file.type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+  }
+
+  function dataUrl(file) {
+    return new Promise(function (resolve, reject) {
+      const reader = new FileReader();
+      reader.onload = function () { resolve(String(reader.result)); };
+      reader.onerror = function () { reject(new Error(file.name + " could not be read.")); };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  // The text of a PDF or Word file (a resume). The backend reads it and keeps nothing; the
+  // text is then kept on this device like any other attached file.
+  async function readDocument(file) {
+    const headers = { "Content-Type": "application/json" };
+    if (settings.accessCode) headers["X-Access-Code"] = settings.accessCode;
+    let response;
+    try {
+      response = await fetch(backendUrl() + "/api/extract", {
+        method: "POST", headers: headers, body: JSON.stringify({ name: file.name, data: await dataUrl(file) }),
+      });
+    } catch (e) {
+      throw new Error("Can't reach PQ to read " + file.name + ". Try again in a moment.");
+    }
+    if (!response.ok) throw await failure(response);
+    const data = await response.json();
+    if (!data || typeof data.text !== "string") throw new Error(file.name + " could not be read.");
+    return data.text;
+  }
+
   async function addFiles(list) {
     for (const file of Array.from(list || [])) {
       const images = attached.filter(function (x) { return x.kind === "image"; }).length;
@@ -613,6 +661,22 @@
         } catch (e) {
           toast("That picture could not be read.");
         }
+      } else if (isDocument(file)) {
+        if (files >= MAX_FILES) { toast("At most " + MAX_FILES + " files on one question."); continue; }
+        if (file.size > MAX_DOCUMENT_BYTES) { toast(file.name + " is too large (3 MB at most)."); continue; }
+        reading++;
+        setBusy(Boolean(pending));
+        try {
+          toast("Reading " + file.name + "…", 15000);
+          const text = await readDocument(file);
+          attached.push({ kind: "file", name: file.name,
+                          text: text.length > DOCUMENT_CHARS ? text.slice(0, DOCUMENT_CHARS) + "\n... (cut: the document is longer)" : text });
+          toast(file.name + " is attached.");
+        } catch (e) {
+          toast(e.message, 6000);
+        } finally {
+          reading--;
+        }
       } else if (isTextFile(file)) {
         if (files >= MAX_FILES) { toast("At most " + MAX_FILES + " files on one question."); continue; }
         let text = await file.text();
@@ -620,7 +684,8 @@
         if (text.length > FILE_CHARS) text = text.slice(0, FILE_CHARS) + "\n... (cut: the file is longer)";
         attached.push({ kind: "file", name: file.name, text: text });
       } else {
-        toast("PQ reads pictures and text files (code, logs, configuration). " + (file.name || "That file") + " is neither.", 5000);
+        toast("PQ reads pictures, PDF and Word files, and text files (code, logs, configuration). " +
+              (file.name || "That file") + " is none of these.", 5000);
       }
       renderAttached();
     }
@@ -641,11 +706,23 @@
 
   // ---------- chat or interview ----------
 
-  function applyMode() {
-    const interview = settings.mode === "interview";
-    el.modePill.hidden = !interview;
-    el.input.placeholder = interview ? "Ask an interview question" : "Ask a technical question";
+  function modeOf(chat) {
+    return (chat && chat.mode in MODES) ? chat.mode : (chat ? "chat" : settings.mode);
   }
+
+  function applyMode() {
+    const chat = currentChat();
+    const mode = modeOf(chat);
+    el.modePill.hidden = !MODES[mode];
+    el.modePill.textContent = MODES[mode];
+    el.input.placeholder = mode === "mock" ? (chat ? "Type or speak your answer" : "Say hi, or press Start")
+      : mode === "interview" ? "Ask an interview question" : "Ask a technical question";
+    const mockStart = mode === "mock" && !chat;
+    el.startMock.hidden = el.mockIntro.hidden = !mockStart;
+    el.welcomeTitle.textContent = mockStart ? "Ready for your mock interview?" : "Hey, need any help?";
+  }
+
+  el.startMock.addEventListener("click", function () { submit("Start the mock interview."); });
 
   // ---------- speaking a question ----------
   // The browser's own speech recognition turns speech into text in the question box. PQ's
@@ -656,6 +733,7 @@
 
   const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   let listening = null;             // {recognition, before, heard} while the microphone is on
+  let micRefused = false;           // the microphone was refused: don't start it on its own again
 
   function stopListening() {
     if (listening) listening.recognition.stop();
@@ -690,6 +768,7 @@
         "network": "Speech recognition needs an internet connection.",
         "no-speech": "I didn't hear anything. Press the microphone and speak.",
       }[e.error];
+      if (e.error === "not-allowed" || e.error === "service-not-allowed" || e.error === "audio-capture") micRefused = true;
       if (why) toast(why, 5000);
     };
     recognition.onend = function () {
@@ -720,6 +799,7 @@
   if (Recognition && el.mic) {
     el.mic.hidden = false;
     el.mic.addEventListener("click", function () {
+      micRefused = false;             // pressed by hand: try again
       if (listening) stopListening();
       else startListening();
     });
@@ -731,6 +811,8 @@
     el.theme.value = settings.theme;
     el.accessCode.value = settings.accessCode;
     el.mode.value = settings.mode;
+    el.autoListen.checked = settings.autoListen !== false;
+    el.autoListen.disabled = !Recognition;
     let bytes = 0;
     try { bytes = (localStorage.getItem(CHATS_KEY) || "").length; } catch (e) { /* blocked */ }
     el.storageInfo.textContent = chats.length + (chats.length === 1 ? " chat, " : " chats, ") +
@@ -785,6 +867,7 @@
     if (pending) { pending.controller.abort(); return; }   // the button is "Stop" while waiting
     if (listening) listening.sent = true;
     stopListening();
+    if (reading) { toast("Wait a moment: a file is still being read."); return; }
     const text = el.input.value.trim();
     if (!text && !attached.length) return;
     const extras = attached;
@@ -817,9 +900,16 @@
   $("openSettings").addEventListener("click", openSettings);
   $("cancelSettings").addEventListener("click", function () { el.settings.close(); });
   $("settingsForm").addEventListener("submit", function () {
-    settings = { theme: el.theme.value, accessCode: el.accessCode.value.trim(), mode: el.mode.value };
+    const modeChanged = el.mode.value !== settings.mode;
+    settings = { theme: el.theme.value, accessCode: el.accessCode.value.trim(), mode: el.mode.value,
+                 autoListen: el.autoListen.checked };
     save(SETTINGS_KEY, settings);
     applyTheme();
+    if (modeChanged && !pending) {
+      startNewChat();               // a chat keeps the mode it began in: the new mode starts a new chat
+      toast(MODES[settings.mode] ? MODES[settings.mode] + " is on." : "Chat mode is on.");
+      return;
+    }
     applyMode();
     toast("Settings saved.");
   });

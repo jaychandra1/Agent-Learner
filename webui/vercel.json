@@ -6,7 +6,8 @@
   "functions": {
     "api/chat.js": { "maxDuration": 300 },
     "api/stream.js": { "maxDuration": 300 },
-    "api/health.js": { "maxDuration": 120 }
+    "api/health.js": { "maxDuration": 120 },
+    "api/extract.js": { "maxDuration": 60 }
   },
   "headers": [
     {

@@ -83,16 +83,30 @@ Tests: `test_agent.py`, `test_provider_cursor.py`.
 
 ---
 
-### Interview mode (web UI)
+### Interview modes (web UI)
 
-When a person chooses **Interview** under Settings > Mode in the web UI, one more rule is added to the ones above (`INTERVIEW_RULE` in `agent.py`). It replaces the layout of rules 1 and 2; every other rule stays, the boundaries included.
+The web UI has three modes under Settings > Mode. **Chat** uses the rules above. The two interview modes each add one rule (`INTERVIEW_RULE` and `MOCK_RULE` in `agent.py`); every other rule stays, the boundaries included. A chat keeps the mode it was started in. Teams, the internal API and the command line always use chat mode.
 
-- The answer is what a strong candidate would say out loud: first person, short spoken sentences, about 150 to 250 words (one to two minutes).
-- Order: the direct answer, the three or four points an interviewer listens for, one concrete example told as experience (a sample the person replaces with their own), one sentence on the trade-off.
-- Code only when the question asks for it.
-- After the answer: **Likely follow-ups** (two or three questions) and a **Tip**.
+**Interview: PQ gives the answer you should give.** It replaces the layout of rules 1 and 2:
 
-Teams, the internal API and the command line always use chat mode.
+- It first decides what kind of question it is and answers in that structure:
+  - Theory: definition, why it exists, how it works internally, components, real-world example, best practices, common issues, interview-level conclusion.
+  - Scenario ("tell me about a time..."): STAR with a technical deep dive: situation, problem and business impact, investigation, root cause, resolution, validation, impact with numbers, lessons learned.
+  - System design: requirements clarification, functional and non-functional requirements, capacity estimation, high-level design, database, API, scaling, availability, security, monitoring, trade-offs, improvements.
+  - Behavioral or managerial: STAR plus what was learned.
+- It is written the way a candidate says it, and examples told as experience are marked as samples to replace with your own.
+- Depth follows your experience (0-2, 3-5, 5-8, 8-12, 12+ years) if you have mentioned it; otherwise the 5-8 year level.
+- After the answer: what the interviewer is listening for, how a senior engineer lifts it, and likely follow-ups.
+
+**Interview mock: PQ is the interviewer.** It replaces rules 1 to 3 and the length limit:
+
+1. Setup: it asks once for your resume (the + button takes PDF, Word or text), years of experience, current and target role, stack, target company and interview type (Technical, System design, Behavioral, Managerial, DevOps, Cloud, Kubernetes/OpenShift, Full mock).
+2. It asks one numbered question at a time, tailored to the resume and roles, and waits.
+3. Each answer gets a score out of 10 (accuracy 40%, depth 20%, real-world experience 20%, clarity 10%, senior-level thinking 10%), judged at your experience level, then: what went well, what was missing, red flags, what the interviewer expected, the best possible answer, a senior-level touch, and the next question.
+4. Commands: `hint`, `skip`, `repeat`, and `end` (or `finish`) for the final report with all scores, strengths, the three things to work on and a readiness verdict.
+5. It never repeats phone numbers, email or home addresses from the resume.
+
+In a mock interview the microphone starts listening after each question (Settings: "listen for my answer"), so you can answer out loud and press Send. If the browser refuses the microphone, it stops trying until you press the microphone button yourself.
 
 ---
 

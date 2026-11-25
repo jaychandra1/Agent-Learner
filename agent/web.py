@@ -5,11 +5,14 @@ device and sends the conversation along with each question, so nothing is stored
 
     POST /api/chat   {"messages": [{"role": "user" | "assistant", "content": "..."}, ...]}
                      -> {"answer": "..."}            the last message is the new question
-                     optional: "mode": "chat" | "interview" (how to answer), and on a user
+                     optional: "mode": "chat" | "interview" | "mock" (how to answer), and on a user
                      message "images": ["data:image/png;base64,...", ...]
     POST /api/stream the same question, answered while the model writes (server-sent events):
                      data: {"delta": "text"} ... then data: {"done": true, "answer": "all of it"}
                      or data: {"error": "..."}
+    POST /api/extract {"name": "resume.pdf", "data": "data:application/pdf;base64,..."}
+                     -> {"name": ..., "text": "..."}   the text of a PDF or Word file (a resume); the
+                     page keeps it on the device and sends it as text with the questions
     GET  /api/health -> {"status": "ok", ...}        also what a hosting platform can probe
 
 Served on the public port only (app.public_app). It is off until WEB_UI names the UI's
@@ -24,9 +27,14 @@ An open endpoint in front of a paid AI model needs some care:
 
 People on the web UI are treated like people in Teams: the boundaries apply (boundaries.py).
 """
+import base64
+import binascii
 import hmac
+import html
+import io
 import json
 import logging
+import zipfile
 import os
 import re
 import threading
@@ -78,6 +86,10 @@ MAX_IMAGES = 4                # pictures one request may carry, the newest are u
 MAX_IMAGE_CHARS = 3_000_000   # one picture as a data URL (about 2 MB of image)
 IMAGE_ONLY = "Explain what this image shows."   # the question when a picture comes without words
 _DATA_URL = re.compile(r"^data:(image/(?:png|jpeg|webp|gif));base64,([A-Za-z0-9+/]+=*)$")
+MAX_DOCUMENT_CHARS = 7_000_000  # a PDF or Word file as a data URL (about 5 MB)
+MAX_DOCUMENT_TEXT = 40000       # characters of text taken from it
+MAX_DOCUMENT_PAGES = 40
+DOCX = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 MAX_WAITING = 8               # questions running or waiting, above that people get "busy"
 _slots = threading.BoundedSemaphore(MAX_WAITING)
 _calls: dict[str, deque] = defaultdict(deque)
@@ -94,7 +106,12 @@ class Message(BaseModel):
 
 class ChatIn(BaseModel):
     messages: list[Message]
-    mode: Literal["chat", "interview"] = "chat"
+    mode: Literal["chat", "interview", "mock"] = "chat"
+
+
+class ExtractIn(BaseModel):
+    name: str = "document"
+    data: str
 
 
 def _client(request: Request) -> str:
@@ -267,3 +284,79 @@ def stream(body: ChatIn, request: Request, x_access_code: str = Header(None)):
             slots.release()
 
     return StreamingResponse(events(), media_type="text/event-stream", headers=_STREAM_HEADERS)
+
+
+# --- reading a resume (or any PDF or Word file) ---
+
+def _pdf_text(raw: bytes) -> str:
+    try:
+        from pypdf import PdfReader
+    except ImportError:  # pragma: no cover - pypdf is in requirements.txt
+        raise HTTPException(status_code=501, detail="This PQ can't read PDF files. Paste the text instead.")
+    try:
+        reader = PdfReader(io.BytesIO(raw))
+        if reader.is_encrypted:
+            raise HTTPException(status_code=422, detail="That PDF is password-protected. Save it without a password.")
+        pages = [page.extract_text() or "" for page in reader.pages[:MAX_DOCUMENT_PAGES]]
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=422, detail="That PDF could not be read.")
+    return "\n\n".join(p.strip() for p in pages if p.strip())
+
+
+_PARAGRAPH = re.compile(r"<w:p[ >].*?</w:p>", re.S)
+_RUN_TEXT = re.compile(r"<w:t(?: [^>]*)?>([^<]*)</w:t>|<w:tab/>|<w:br/>")
+
+
+def _docx_text(raw: bytes) -> str:
+    """The paragraphs of a Word file. A .docx is a zip with the text in word/document.xml;
+    the text is taken with a pattern rather than an XML parser, so no XML feature of the file
+    can do anything here."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(raw)) as z:
+            info = z.getinfo("word/document.xml")
+            if info.file_size > 30_000_000:  # a zip bomb, or not a resume
+                raise HTTPException(status_code=413, detail="That document is too large.")
+            xml = z.read(info).decode("utf-8", "replace")
+    except HTTPException:
+        raise
+    except (zipfile.BadZipFile, KeyError, OSError):
+        raise HTTPException(status_code=422, detail="That Word file could not be read. Use .docx, or a PDF.")
+    lines = []
+    for paragraph in _PARAGRAPH.findall(xml):
+        parts = [m.group(1) if m.group(1) is not None else ("\t" if m.group(0) == "<w:tab/>" else "\n")
+                 for m in _RUN_TEXT.finditer(paragraph)]
+        lines.append(html.unescape("".join(parts)).strip())
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
+
+
+@router.post("/extract")
+def extract(body: ExtractIn, request: Request, x_access_code: str = Header(None)):
+    """The text of a PDF or Word file. Nothing is kept: the text goes back to the page."""
+    _guard(x_access_code)
+    _rate_limit(_client(request))
+    if len(body.data) > MAX_DOCUMENT_CHARS:
+        raise HTTPException(status_code=413, detail="That file is too large (5 MB at most).")
+    header, _, payload = body.data.partition(",")
+    match = re.match(r"^data:([\w.+/-]*);base64$", header)
+    if not match:
+        raise HTTPException(status_code=422, detail="Send the file as a data URL.")
+    try:
+        raw = base64.b64decode(payload, validate=True)
+    except (binascii.Error, ValueError):
+        raise HTTPException(status_code=422, detail="That file is damaged.")
+    name = body.name.strip()[:120] or "document"
+    if raw.startswith(b"%PDF"):
+        text = _pdf_text(raw)
+    elif raw.startswith(b"PK") and (match.group(1) in (DOCX, "application/zip", "application/octet-stream", "")
+                                    or name.lower().endswith(".docx")):
+        text = _docx_text(raw)
+    else:
+        raise HTTPException(status_code=422, detail="PQ reads PDF and Word (.docx) files here.")
+    if not text:
+        raise HTTPException(status_code=422, detail="No text was found in that file. If it is a scan, paste the "
+                                                    "text, or attach it as a picture.")
+    logger.info("Read a document (%d characters of text)", len(text))
+    cut = len(text) > MAX_DOCUMENT_TEXT
+    return {"name": name, "text": text[:MAX_DOCUMENT_TEXT] + ("\n... (cut: the document is longer)" if cut else "")}

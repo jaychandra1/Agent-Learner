@@ -5,4 +5,5 @@ fastapi>=0.110.0,<1
 uvicorn[standard]>=0.29.0,<1
 pydantic>=2.6.0,<3
 requests>=2.31.0,<3
+pypdf>=4.0,<7       # text of an uploaded resume (PDF); pure Python
 tzdata>=2024.1  # time zone data for TIMEZONE (the slim base image has none for Python's zoneinfo)
