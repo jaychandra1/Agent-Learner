@@ -55,7 +55,7 @@ svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width:
 ::-webkit-scrollbar-thumb { background: var(--line-strong); border: 3px solid transparent; border-radius: 10px; background-clip: content-box; }
 
 .app { display: grid; grid-template-columns: 288px minmax(0, 1fr); height: 100dvh; }
-.app.menu-hidden { grid-template-columns: 0 minmax(0, 1fr); }
+.app.menu-hidden { grid-template-columns: minmax(0, 1fr); }  /* the hidden sidebar leaves the grid: one column for the chat */
 .app.menu-hidden .sidebar { display: none; }
 
 /* ---------- sidebar ---------- */
