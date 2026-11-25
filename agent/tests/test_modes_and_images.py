@@ -71,7 +71,10 @@ def test_interview_rule_is_added_only_in_that_mode():
     for must in ("Interview mode is on", "Definition; Why it exists; How it works", "technical deep dive: Situation",
                  "Requirements clarification", "Capacity estimation", "Behavioral or managerial",
                  "12+ years: strategy", "answer at the 5-8 year level", "**What the interviewer is listening for:**",
-                 "**How a senior engineer lifts it:**", "**Likely follow-ups:**", "put their\nown project and numbers in"):
+                 "**How a senior engineer lifts it:**", "**Likely follow-ups:**", "own project and numbers in",
+                 "set up their interview profile", "(attached with the + button, or pasted)",
+                 "build the real-world examples from their own", "Kubernetes/OpenShift, or all of these",
+                 "never repeat phone numbers, email addresses or home addresses"):
         assert must in agent.INTERVIEW_RULE, must
     assert "Mock interview mode" not in interview
 
@@ -204,6 +207,8 @@ def test_ui_has_the_plus_button_the_mode_setting_and_a_simple_greeting():
     assert 'value="mock"' in page and 'id="startMock"' in page and 'id="autoListen"' in page and ".pdf" in page
     assert "mode: requestMode" in app_js and "toDataURL" in app_js and "SUGGESTIONS" not in app_js
     assert '"/api/extract"' in app_js and "startListening()" in app_js and "mode: settings.mode }" in app_js
+    assert "Set up my interview profile." in app_js and "Share my resume & details" in app_js
+    assert "Start the mock interview." in app_js
 
 
 # --- Reading a resume: PDF and Word ---

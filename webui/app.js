@@ -453,7 +453,8 @@
       .map(function (x) { return { name: x.name, text: x.text }; });
     let chat = currentChat();
     if (!chat) {
-      const name = settings.mode === "mock" ? "Mock interview" : text || (files[0] && files[0].name) || "Image";
+      const name = settings.mode === "mock" ? "Mock interview"
+        : text === "Set up my interview profile." ? "Interview prep" : text || (files[0] && files[0].name) || "Image";
       chat = { id: newId(), title: titleFrom(name), created: Date.now(), updated: Date.now(), messages: [],
                mode: settings.mode };
       chats.push(chat);
@@ -717,12 +718,36 @@
     el.modePill.textContent = MODES[mode];
     el.input.placeholder = mode === "mock" ? (chat ? "Type or speak your answer" : "Say hi, or press Start")
       : mode === "interview" ? "Ask an interview question" : "Ask a technical question";
-    const mockStart = mode === "mock" && !chat;
-    el.startMock.hidden = el.mockIntro.hidden = !mockStart;
-    el.welcomeTitle.textContent = mockStart ? "Ready for your mock interview?" : "Hey, need any help?";
+    const start = !chat && START[mode];
+    el.startMock.hidden = el.mockIntro.hidden = !start;
+    el.welcomeTitle.textContent = start ? start.title : "Hey, need any help?";
+    if (start) {
+      el.mockIntro.textContent = start.note;
+      el.startMock.textContent = start.button;
+    }
   }
 
-  el.startMock.addEventListener("click", function () { submit("Start the mock interview."); });
+  // What a new chat offers in the two interview modes. Both begin by asking for the resume
+  // and the person's details; in Interview mode a question can also be asked straight away.
+  const START = {
+    interview: {
+      title: "Preparing for an interview?",
+      note: "Share your resume and details and every answer is built on your own experience and projects. Or just ask a question.",
+      button: "Share my resume & details",
+      message: "Set up my interview profile.",
+    },
+    mock: {
+      title: "Ready for your mock interview?",
+      note: "I'll interview you like a real interviewer: one question at a time, a score and feedback after each answer, and a report at the end. Have your resume ready.",
+      button: "Start mock interview",
+      message: "Start the mock interview.",
+    },
+  };
+
+  el.startMock.addEventListener("click", function () {
+    const start = START[modeOf(currentChat())];
+    if (start) submit(start.message);
+  });
 
   // ---------- speaking a question ----------
   // The browser's own speech recognition turns speech into text in the question box. PQ's

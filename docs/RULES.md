@@ -94,7 +94,8 @@ The web UI has three modes under Settings > Mode. **Chat** uses the rules above.
   - Scenario ("tell me about a time..."): STAR with a technical deep dive: situation, problem and business impact, investigation, root cause, resolution, validation, impact with numbers, lessons learned.
   - System design: requirements clarification, functional and non-functional requirements, capacity estimation, high-level design, database, API, scaling, availability, security, monitoring, trade-offs, improvements.
   - Behavioral or managerial: STAR plus what was learned.
-- It is written the way a candidate says it, and examples told as experience are marked as samples to replace with your own.
+- **Profile:** a new Interview chat offers **Share my resume & details**. PQ then asks once for the same things as the mock interview (resume, experience, roles, stack, company, interview type), sums up what it understood, and waits for your questions. You can also skip it and ask straight away; PQ then mentions once that sharing a resume gives answers built on your own work.
+- It is written the way a candidate says it. With your resume, the real-world examples come from your own projects (named), and where the resume shows no experience with the topic it says so and shows how to answer honestly. Without one, examples told as experience are marked as samples to replace with your own.
 - Depth follows your experience (0-2, 3-5, 5-8, 8-12, 12+ years) if you have mentioned it; otherwise the 5-8 year level.
 - After the answer: what the interviewer is listening for, how a senior engineer lifts it, and likely follow-ups.
 
